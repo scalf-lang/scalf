@@ -1,6 +1,8 @@
 pub mod docgen;
 pub mod errors;
+pub mod formatter;
 pub mod lexer;
+pub mod lint;
 pub mod parser;
 pub mod repl;
 pub mod runtime;

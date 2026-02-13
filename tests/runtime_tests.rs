@@ -425,3 +425,23 @@ fn import_fails_when_cached_hash_is_tampered() {
         message
     );
 }
+
+#[test]
+fn runs_test_blocks_and_reports_failures() {
+    let source = "test \"pass\" { assert 1 + 1 == 2 }\n\
+                  test \"fail\" { assert 1 + 1 == 3, \"bad math\" }";
+    let tokens = rask::lexer::lex(source).expect("lex should succeed");
+    let mut parser = rask::parser::Parser::new(tokens);
+    let program = parser.parse_program().expect("parse should succeed");
+
+    let mut runtime =
+        rask::runtime::Runtime::with_permissions(rask::runtime::Permissions::allow_all())
+            .with_source_label("tests/runtime_tests.rask");
+    let report = runtime.run_tests(&program);
+
+    assert_eq!(report.passed, 1);
+    assert_eq!(report.failed, 1);
+    assert_eq!(report.results.len(), 2);
+    assert!(report.results[0].passed);
+    assert!(!report.results[1].passed);
+}

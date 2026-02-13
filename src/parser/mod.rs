@@ -83,6 +83,14 @@ impl Parser {
             return self.destructure_declaration();
         }
 
+        if self.matches_identifier_literal("test") {
+            return self.test_statement();
+        }
+
+        if self.matches_identifier_literal("assert") {
+            return self.assert_statement();
+        }
+
         let expr = self.expression()?;
         Ok(Stmt::Expr(expr))
     }
@@ -118,6 +126,34 @@ impl Parser {
         };
 
         Ok(Stmt::Use { target, alias })
+    }
+
+    fn test_statement(&mut self) -> Result<Stmt, ParseError> {
+        let name = match self.peek_kind().clone() {
+            TokenKind::String { value, .. } => {
+                self.advance();
+                value
+            }
+            _ => {
+                return Err(ParseError::new(
+                    "expected test name string after 'test'",
+                    self.peek(),
+                ))
+            }
+        };
+        self.consume_symbol(TokenKind::LeftBrace, "expected '{' before test body")?;
+        let body = self.parse_block_statements()?;
+        Ok(Stmt::Test { name, body })
+    }
+
+    fn assert_statement(&mut self) -> Result<Stmt, ParseError> {
+        let condition = self.expression()?;
+        let message = if self.matches_symbol(TokenKind::Comma) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        Ok(Stmt::Assert { condition, message })
     }
 
     fn function_definition(&mut self) -> Result<Stmt, ParseError> {

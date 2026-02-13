@@ -141,6 +141,35 @@ impl TypeChecker {
                     .unwrap_or_else(|| target.default_binding_name());
                 self.define(name, Type::Unknown);
             }
+            Stmt::Test { name: _, body } => {
+                self.push_scope();
+                for stmt in body {
+                    self.check_statement(stmt, errors);
+                }
+                self.pop_scope();
+            }
+            Stmt::Assert { condition, message } => {
+                let condition_ty = self.infer_expr(condition, errors);
+                if !is_assignable(&condition_ty, &Type::Bool)
+                    && !matches!(condition_ty, Type::Unknown)
+                {
+                    errors.push(TypeError::new(format!(
+                        "assert condition must be bool, got '{}'",
+                        condition_ty
+                    )));
+                }
+                if let Some(message_expr) = message {
+                    let message_ty = self.infer_expr(message_expr, errors);
+                    if !is_assignable(&message_ty, &Type::String)
+                        && !matches!(message_ty, Type::Unknown)
+                    {
+                        errors.push(TypeError::new(format!(
+                            "assert message must be string, got '{}'",
+                            message_ty
+                        )));
+                    }
+                }
+            }
             Stmt::VarDecl {
                 name,
                 type_annotation,

@@ -13,7 +13,8 @@ pub fn run_with_permissions(
     let stdin = io::stdin();
     let mut line = String::new();
     let mut checker = crate::typechecker::TypeChecker::new();
-    let mut runtime = crate::runtime::Runtime::with_permissions(permissions);
+    let mut runtime =
+        crate::runtime::Runtime::with_permissions(permissions).with_source_label("<repl>");
 
     println!("Rask REPL (Phase 3 runtime mode)");
     println!("Type 'exit' or 'quit' to stop.");
@@ -50,15 +51,21 @@ pub fn run_with_permissions(
                             Err(err) => eprintln!("{}", err),
                         },
                         Err(errors) => {
-                            for error in errors {
-                                eprintln!("{}", error);
+                            for rendered in crate::errors::pretty::format_type_errors("<repl>", &errors) {
+                                eprintln!("{}", rendered);
                             }
                         }
                     },
-                    Err(err) => eprintln!("{}", err),
+                    Err(err) => eprintln!(
+                        "{}",
+                        crate::errors::pretty::format_parse_error("<repl>", input.as_str(), &err)
+                    ),
                 }
             }
-            Err(err) => eprintln!("{}", err),
+            Err(err) => eprintln!(
+                "lex error [LEX0001]: {}\n--> <repl>:{}:{}\ndocs: https://rask-lang.dev/errors/LEX0001",
+                err.message, err.line, err.column
+            ),
         }
     }
 

@@ -109,3 +109,9 @@ fn infers_list_comprehension_type() {
         Some(&Type::List(Box::new(Type::Int)))
     );
 }
+
+#[test]
+fn checks_test_and_assert_statements() {
+    let output = check("test \"ok\" { assert 1 + 1 == 2 }").expect("typecheck should succeed");
+    assert!(output.inferred_types.contains_key("len"));
+}

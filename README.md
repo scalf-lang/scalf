@@ -45,10 +45,22 @@ Phase 5 foundations are implemented:
 - Stdlib organization includes `std.time` and `std.crypto`
 - Auto-generated stdlib docs from `stdlib/std/*.rask` doc comments (`rask docs`)
 
+Phase 6 foundations are implemented:
+- Runtime diagnostics include error codes, hints, docs links, and stack traces
+- Runtime errors now include concrete values in key failure paths (nil member access, assert failures, non-callable values)
+- Member/method suggestions (`did you mean ...`) for common lookup failures
+- Tooling commands:
+  - `rask fmt [--check] <file>`
+  - `rask check <file>` (typecheck + lint warnings)
+  - `rask test <file>` with built-in `test`/`assert` syntax
+
 ## Run (when Rust is installed)
 
 ```bash
 cargo test
 cargo run
 cargo run -- docs
+cargo run -- fmt --check path/to/file.rask
+cargo run -- check path/to/file.rask
+cargo run -- test path/to/file.rask
 ```

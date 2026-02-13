@@ -9,6 +9,14 @@ pub enum Stmt {
         target: UseTarget,
         alias: Option<String>,
     },
+    Test {
+        name: String,
+        body: Vec<Stmt>,
+    },
+    Assert {
+        condition: Expr,
+        message: Option<Expr>,
+    },
     VarDecl {
         name: String,
         type_annotation: Option<String>,

@@ -204,24 +204,24 @@
 **Goal**: Best-in-class error messages and tooling
 
 #### Week 21-22: Error Messages
-- [ ] Show actual values in errors
+- [x] Show actual values in errors
   - "Cannot call .name on null, user = null (type: User?)"
-- [ ] Helpful hints and suggestions
+- [x] Helpful hints and suggestions
   - Did you mean? suggestions
   - Common fix suggestions
-- [ ] Stack traces show user code first
+- [x] Stack traces show user code first
   - Collapse framework/stdlib code
   - Clickable file paths with line numbers
-- [ ] Error codes and documentation links
+- [x] Error codes and documentation links
 
 #### Week 23-24: Tooling
-- [ ] Auto-formatter: `rask fmt`
+- [x] Auto-formatter: `rask fmt`
   - One style, no configuration
   - Format on save integration
-- [ ] Linter: `rask check`
+- [x] Linter: `rask check`
   - Catch common mistakes
   - Best practice enforcement
-- [ ] Built-in testing
+- [x] Built-in testing
   - `test "name" { assert ... }` syntax
   - `rask test` command
   - Test runner with good output

@@ -1,12 +1,14 @@
 # Rask Language Specification (Draft)
 
-## Phase 1-4 Grammar
+## Phase 1-6 Grammar
 
 ```text
 program      -> statement* EOF ;
-statement    -> var_decl | destructure_decl | func_def | return_stmt | print_stmt | expr_stmt ;
-statement    -> use_stmt | ... ;
+statement    -> use_stmt | test_stmt | assert_stmt | var_decl | destructure_decl
+             | func_def | return_stmt | print_stmt | expr_stmt ;
 use_stmt     -> "use" (IDENT ("." IDENT)* | STRING) ("as" IDENT)? ;
+test_stmt    -> "test" STRING block ;
+assert_stmt  -> "assert" expression ("," expression)? ;
 var_decl     -> IDENT (":" type)? "=" expression ;
 destructure_decl -> pattern "=" expression ;
 func_def     -> "def" IDENT "(" params? ")" ("->" type)? block ;
@@ -66,3 +68,9 @@ generic_args -> "<" type ("," type)* ">" ;
 
 - `rask docs` generates `docs/stdlib_reference.md` from top-of-file comments in `stdlib/std/*.rask`
 - Optional output override: `rask docs --out=path/to/file.md`
+
+## Tooling Commands
+
+- `rask fmt [--check] <file>`
+- `rask check <file>`
+- `rask test <file> [permission flags]`

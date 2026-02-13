@@ -5,9 +5,10 @@ use std::path::PathBuf;
 fn main() {
     let args = env::args().skip(1).collect::<Vec<_>>();
 
-    if let Some(result) = maybe_run_docs_command(&args) {
+    if let Some(result) = maybe_run_subcommand(&args) {
         if let Err(err) = result {
             eprintln!("{}", err);
+            std::process::exit(1);
         }
         return;
     }
@@ -16,45 +17,162 @@ fn main() {
         Ok((script_path, permissions)) => {
             if let Some(path) = script_path {
                 match fs::read_to_string(&path) {
-                    Ok(source) => run_source(&source, permissions),
-                    Err(err) => eprintln!("failed to read '{}': {}", path, err),
+                    Ok(source) => {
+                        if let Err(err) = run_source_file(&path, &source, permissions) {
+                            eprintln!("{}", err);
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("failed to read '{}': {}", path, err);
+                        std::process::exit(1);
+                    }
                 }
             } else if let Err(err) = rask::repl::run_with_permissions(permissions) {
                 eprintln!("repl error: {}", err);
+                std::process::exit(1);
             }
         }
-        Err(err) => eprintln!("{}", err),
+        Err(err) => {
+            eprintln!("{}", err);
+            std::process::exit(1);
+        }
     }
 }
 
-fn maybe_run_docs_command(args: &[String]) -> Option<Result<(), String>> {
-    if args.first().map(|arg| arg.as_str()) != Some("docs") {
-        return None;
+fn maybe_run_subcommand(args: &[String]) -> Option<Result<(), String>> {
+    let command = args.first()?.as_str();
+    match command {
+        "docs" => Some(run_docs_command(args)),
+        "fmt" => Some(run_fmt_command(args)),
+        "check" => Some(run_check_command(args)),
+        "test" => Some(run_test_command(args)),
+        _ => None,
     }
+}
 
+fn run_docs_command(args: &[String]) -> Result<(), String> {
     let mut output = PathBuf::from("docs/stdlib_reference.md");
     for arg in args.iter().skip(1) {
         if let Some(value) = arg.strip_prefix("--out=") {
             output = PathBuf::from(value);
             continue;
         }
-        return Some(Err(format!(
+        return Err(format!(
             "unknown docs option '{}'; supported: --out=<path>",
             arg
-        )));
+        ));
     }
 
-    Some(
-        rask::docgen::generate_stdlib_reference(&output)
-            .map(|report| {
-                println!(
-                    "generated stdlib docs: {} ({} module files)",
-                    report.output_path.display(),
-                    report.module_count
-                );
-            })
-            .map_err(|err| err.to_string()),
-    )
+    rask::docgen::generate_stdlib_reference(&output)
+        .map(|report| {
+            println!(
+                "generated stdlib docs: {} ({} module files)",
+                report.output_path.display(),
+                report.module_count
+            );
+        })
+        .map_err(|err| err.to_string())
+}
+
+fn run_fmt_command(args: &[String]) -> Result<(), String> {
+    let mut check_only = false;
+    let mut file = None;
+    for arg in args.iter().skip(1) {
+        if arg == "--check" {
+            check_only = true;
+            continue;
+        }
+        if file.is_none() {
+            file = Some(arg.clone());
+            continue;
+        }
+        return Err(format!("unknown fmt option '{}'", arg));
+    }
+
+    let Some(file) = file else {
+        return Err("fmt usage: rask fmt [--check] <file>".to_string());
+    };
+
+    let source =
+        fs::read_to_string(&file).map_err(|err| format!("failed to read '{}': {}", file, err))?;
+    let program = parse_and_typecheck(&source, &file)?;
+    let formatted = rask::formatter::format_program(&program);
+
+    if check_only {
+        if source == formatted {
+            println!("fmt check passed: {}", file);
+            Ok(())
+        } else {
+            Err(format!(
+                "formatting differs for '{}'; run `rask fmt {}`",
+                file, file
+            ))
+        }
+    } else {
+        fs::write(&file, formatted)
+            .map_err(|err| format!("failed to write '{}': {}", file, err))?;
+        println!("formatted {}", file);
+        Ok(())
+    }
+}
+
+fn run_check_command(args: &[String]) -> Result<(), String> {
+    let Some(file) = args.get(1) else {
+        return Err("check usage: rask check <file>".to_string());
+    };
+    let source =
+        fs::read_to_string(file).map_err(|err| format!("failed to read '{}': {}", file, err))?;
+    let program = parse_and_typecheck(&source, file)?;
+
+    let warnings = rask::lint::lint_program(&program);
+    if warnings.is_empty() {
+        println!("check passed: {}", file);
+    } else {
+        for warning in &warnings {
+            println!(
+                "{}",
+                rask::errors::pretty::format_lint_warning(warning, file)
+            );
+        }
+        println!("check passed with {} warning(s): {}", warnings.len(), file);
+    }
+    Ok(())
+}
+
+fn run_test_command(args: &[String]) -> Result<(), String> {
+    let (script_path, permissions) = parse_cli(args.iter().skip(1).cloned().collect())?;
+    let Some(path) = script_path else {
+        return Err("test usage: rask test <file> [permissions]".to_string());
+    };
+
+    let source =
+        fs::read_to_string(&path).map_err(|err| format!("failed to read '{}': {}", path, err))?;
+    let program = parse_and_typecheck(&source, &path)?;
+
+    let mut runtime =
+        rask::runtime::Runtime::with_permissions(permissions).with_source_label(path.clone());
+    let report = runtime.run_tests(&program);
+
+    for case in &report.results {
+        if case.passed {
+            println!("PASS {}", case.name);
+        } else if let Some(err) = &case.error {
+            println!("FAIL {}\n{}", case.name, err);
+        } else {
+            println!("FAIL {}", case.name);
+        }
+    }
+
+    if report.failed == 0 {
+        println!("test result: ok. {} passed; 0 failed", report.passed);
+        Ok(())
+    } else {
+        Err(format!(
+            "test result: FAILED. {} passed; {} failed",
+            report.passed, report.failed
+        ))
+    }
 }
 
 fn parse_cli(args: Vec<String>) -> Result<(Option<String>, rask::runtime::Permissions), String> {
@@ -138,35 +256,42 @@ fn normalize_pathbuf(path: PathBuf) -> PathBuf {
     normalized
 }
 
-fn run_source(source: &str, permissions: rask::runtime::Permissions) {
-    match rask::lexer::lex(source) {
-        Ok(tokens) => {
-            let mut parser = rask::parser::Parser::new(tokens);
-            match parser.parse_program() {
-                Ok(program) => {
-                    let mut checker = rask::typechecker::TypeChecker::new();
-                    match checker.check_program(&program) {
-                        Ok(_) => {
-                            let mut runtime = rask::runtime::Runtime::with_permissions(permissions);
-                            match runtime.run_program(&program) {
-                                Ok(value) => {
-                                    if !matches!(value, rask::runtime::value::Value::Nil) {
-                                        println!("{}", value);
-                                    }
-                                }
-                                Err(err) => eprintln!("{}", err),
-                            }
-                        }
-                        Err(errors) => {
-                            for error in errors {
-                                eprintln!("{}", error);
-                            }
-                        }
-                    }
-                }
-                Err(err) => eprintln!("{}", err),
-            }
-        }
-        Err(err) => eprintln!("{}", err),
+fn parse_and_typecheck(
+    source: &str,
+    source_label: &str,
+) -> Result<rask::parser::ast::Program, String> {
+    let tokens = rask::lexer::lex(source).map_err(|err| {
+        format!(
+            "lex error [LEX0001]: {}\n--> {}:{}:{}\ndocs: https://rask-lang.dev/errors/LEX0001",
+            err.message, source_label, err.line, err.column
+        )
+    })?;
+
+    let mut parser = rask::parser::Parser::new(tokens);
+    let program = parser
+        .parse_program()
+        .map_err(|err| rask::errors::pretty::format_parse_error(source_label, source, &err))?;
+
+    let mut checker = rask::typechecker::TypeChecker::new();
+    checker.check_program(&program).map_err(|errors| {
+        rask::errors::pretty::format_type_errors(source_label, &errors).join("\n\n")
+    })?;
+
+    Ok(program)
+}
+
+fn run_source_file(
+    path: &str,
+    source: &str,
+    permissions: rask::runtime::Permissions,
+) -> Result<(), String> {
+    let program = parse_and_typecheck(source, path)?;
+    let mut runtime = rask::runtime::Runtime::with_permissions(permissions).with_source_label(path);
+    let value = runtime
+        .run_program(&program)
+        .map_err(|err| err.to_string())?;
+    if !matches!(value, rask::runtime::value::Value::Nil) {
+        println!("{}", value);
     }
+    Ok(())
 }

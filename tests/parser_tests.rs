@@ -202,3 +202,16 @@ fn parses_list_comprehension() {
         _ => panic!("expected var declaration"),
     }
 }
+
+#[test]
+fn parses_test_block_and_assert() {
+    let statements = parse("test \"math works\" { assert 2 + 2 == 4 }");
+    match &statements[0] {
+        Stmt::Test { name, body } => {
+            assert_eq!(name, "math works");
+            assert_eq!(body.len(), 1);
+            assert!(matches!(body[0], Stmt::Assert { .. }));
+        }
+        _ => panic!("expected test statement"),
+    }
+}

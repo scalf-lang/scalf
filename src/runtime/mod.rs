@@ -41,10 +41,11 @@ impl Permissions {
         if self.allow_all || self.is_allowed(path, &self.allow_read) {
             Ok(())
         } else {
-            Err(RuntimeError::new(format!(
-                "read access denied for '{}'; pass --allow-read=<path> or --allow-all",
-                path.display()
-            )))
+            Err(
+                RuntimeError::new(format!("read access denied for '{}'", path.display()))
+                    .with_code("RUNTIME0401")
+                    .with_hint("pass --allow-read=<path> or --allow-all"),
+            )
         }
     }
 
@@ -52,10 +53,11 @@ impl Permissions {
         if self.allow_all || self.is_allowed(path, &self.allow_write) {
             Ok(())
         } else {
-            Err(RuntimeError::new(format!(
-                "write access denied for '{}'; pass --allow-write=<path> or --allow-all",
-                path.display()
-            )))
+            Err(
+                RuntimeError::new(format!("write access denied for '{}'", path.display()))
+                    .with_code("RUNTIME0402")
+                    .with_hint("pass --allow-write=<path> or --allow-all"),
+            )
         }
     }
 
@@ -63,10 +65,11 @@ impl Permissions {
         if self.allow_all || self.allow_env {
             Ok(())
         } else {
-            Err(RuntimeError::new(format!(
-                "environment access denied for '{}'; pass --allow-env or --allow-all",
-                key
-            )))
+            Err(
+                RuntimeError::new(format!("environment access denied for '{}'", key))
+                    .with_code("RUNTIME0403")
+                    .with_hint("pass --allow-env or --allow-all"),
+            )
         }
     }
 
@@ -76,10 +79,11 @@ impl Permissions {
         }
 
         if self.allow_net.is_empty() {
-            return Err(RuntimeError::new(format!(
-                "network access denied for '{}'; pass --allow-net=<domain> or --allow-all",
-                url
-            )));
+            return Err(
+                RuntimeError::new(format!("network access denied for '{}'", url))
+                    .with_code("RUNTIME0404")
+                    .with_hint("pass --allow-net=<domain> or --allow-all"),
+            );
         }
 
         let parsed = reqwest::Url::parse(url)
@@ -113,10 +117,12 @@ impl Permissions {
             Ok(())
         } else {
             Err(RuntimeError::new(format!(
-                "network access denied for host '{}'; allowed: {}; pass --allow-net=<domain> or --allow-all",
+                "network access denied for host '{}'; allowed: {}",
                 host,
                 self.allow_net.join(",")
-            )))
+            ))
+            .with_code("RUNTIME0404")
+            .with_hint("allow this host with --allow-net=<domain> or use --allow-all"))
         }
     }
 
@@ -134,19 +140,58 @@ impl Permissions {
 #[derive(Debug, Clone)]
 pub struct RuntimeError {
     pub message: String,
+    pub code: &'static str,
+    pub hint: Option<String>,
+    pub docs_url: Option<String>,
+    pub stack_frames: Vec<String>,
 }
 
 impl RuntimeError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            code: "RUNTIME0001",
+            hint: None,
+            docs_url: Some("https://rask-lang.dev/errors/RUNTIME0001".to_string()),
+            stack_frames: Vec::new(),
         }
+    }
+
+    fn with_code(mut self, code: &'static str) -> Self {
+        self.code = code;
+        self.docs_url = Some(format!("https://rask-lang.dev/errors/{}", code));
+        self
+    }
+
+    fn with_hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    fn with_stack_frames(mut self, frames: Vec<String>) -> Self {
+        if self.stack_frames.is_empty() {
+            self.stack_frames = frames;
+        }
+        self
     }
 }
 
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "runtime error: {}", self.message)
+        writeln!(f, "runtime error [{}]: {}", self.code, self.message)?;
+        if let Some(hint) = &self.hint {
+            writeln!(f, "help: {}", hint)?;
+        }
+        if !self.stack_frames.is_empty() {
+            writeln!(f, "stack trace (most recent call first):")?;
+            for frame in &self.stack_frames {
+                writeln!(f, "  at {}", frame)?;
+            }
+        }
+        if let Some(url) = &self.docs_url {
+            write!(f, "docs: {}", url)?;
+        }
+        Ok(())
     }
 }
 
@@ -157,6 +202,20 @@ enum StmtFlow {
     Return(Value),
 }
 
+#[derive(Debug, Clone)]
+pub struct TestCaseResult {
+    pub name: String,
+    pub passed: bool,
+    pub error: Option<RuntimeError>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TestReport {
+    pub passed: usize,
+    pub failed: usize,
+    pub results: Vec<TestCaseResult>,
+}
+
 #[derive(Debug)]
 pub struct Runtime {
     scopes: Vec<HashMap<String, Value>>,
@@ -164,6 +223,8 @@ pub struct Runtime {
     permissions: Permissions,
     loaded_url_modules: HashMap<String, Value>,
     import_stack: Vec<String>,
+    call_stack: Vec<String>,
+    source_label: String,
 }
 
 impl Runtime {
@@ -178,13 +239,23 @@ impl Runtime {
             permissions,
             loaded_url_modules: HashMap::new(),
             import_stack: Vec::new(),
+            call_stack: Vec::new(),
+            source_label: "<script>".to_string(),
         }
+    }
+
+    pub fn with_source_label(mut self, label: impl Into<String>) -> Self {
+        self.source_label = label.into();
+        self
     }
 
     pub fn run_program(&mut self, program: &Program) -> Result<Value, RuntimeError> {
         let mut last_value = Value::Nil;
         for statement in &program.statements {
-            match self.execute_statement(statement)? {
+            let flow = self
+                .execute_statement(statement)
+                .map_err(|err| self.decorate_error(err))?;
+            match flow {
                 StmtFlow::Continue(value) => last_value = value,
                 StmtFlow::Return(_) => {
                     return Err(RuntimeError::new(
@@ -203,10 +274,110 @@ impl Runtime {
         Ok(last_value)
     }
 
+    pub fn run_tests(&mut self, program: &Program) -> TestReport {
+        let mut tests = Vec::new();
+        let mut setup_error = None;
+
+        for statement in &program.statements {
+            match statement {
+                Stmt::Test { name, body } => tests.push((name.clone(), body.clone())),
+                _ => {
+                    if let Err(err) = self
+                        .execute_statement(statement)
+                        .map_err(|e| self.decorate_error(e))
+                    {
+                        setup_error = Some(err);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(error) = setup_error {
+            return TestReport {
+                passed: 0,
+                failed: tests.len(),
+                results: tests
+                    .into_iter()
+                    .map(|(name, _)| TestCaseResult {
+                        name,
+                        passed: false,
+                        error: Some(error.clone()),
+                    })
+                    .collect(),
+            };
+        }
+
+        let mut results = Vec::new();
+        for (name, body) in tests {
+            self.call_stack
+                .push(format!("{}:1: test \"{}\"", self.source_label, name));
+            self.push_scope();
+            let mut case_error = None;
+            for statement in &body {
+                match self
+                    .execute_statement(statement)
+                    .map_err(|e| self.decorate_error(e))
+                {
+                    Ok(StmtFlow::Continue(_)) => {}
+                    Ok(StmtFlow::Return(_)) => {
+                        case_error = Some(
+                            RuntimeError::new("'return' is not allowed inside test blocks")
+                                .with_code("RUNTIME0301")
+                                .with_hint("remove 'return' or wrap logic in a function"),
+                        );
+                        break;
+                    }
+                    Err(err) => {
+                        case_error = Some(err);
+                        break;
+                    }
+                }
+            }
+            self.pop_scope();
+            self.call_stack.pop();
+
+            results.push(TestCaseResult {
+                name,
+                passed: case_error.is_none(),
+                error: case_error,
+            });
+        }
+
+        let passed = results.iter().filter(|r| r.passed).count();
+        let failed = results.len().saturating_sub(passed);
+        TestReport {
+            passed,
+            failed,
+            results,
+        }
+    }
+
     fn execute_statement(&mut self, statement: &Stmt) -> Result<StmtFlow, RuntimeError> {
         match statement {
             Stmt::Use { target, alias } => {
                 self.execute_use(target, alias.as_deref())?;
+                Ok(StmtFlow::Continue(Value::Nil))
+            }
+            Stmt::Test { .. } => Ok(StmtFlow::Continue(Value::Nil)),
+            Stmt::Assert { condition, message } => {
+                let result = self.eval_expr(condition)?;
+                if !result.is_truthy() {
+                    let message_text = if let Some(msg_expr) = message {
+                        let message_value = self.eval_expr(msg_expr)?;
+                        expect_string(&message_value, "assert message")?
+                    } else {
+                        "assertion failed".to_string()
+                    };
+                    return Err(RuntimeError::new(format!(
+                        "{}: condition evaluated to {} (type: {})",
+                        message_text,
+                        result,
+                        result.type_name()
+                    ))
+                    .with_code("RUNTIME0300")
+                    .with_hint("assert a boolean expression that evaluates to true"));
+                }
                 Ok(StmtFlow::Continue(Value::Nil))
             }
             Stmt::VarDecl {
@@ -291,9 +462,15 @@ impl Runtime {
             path[path.len() - 1].clone()
         };
 
-        let module = self
-            .lookup(&module_name)
-            .ok_or_else(|| RuntimeError::new(format!("unknown module '{}'", module_name)))?;
+        let module = self.lookup(&module_name).ok_or_else(|| {
+            let builtins = builtins::core_globals().keys().cloned().collect::<Vec<_>>();
+            let mut err = RuntimeError::new(format!("unknown module '{}'", module_name))
+                .with_code("RUNTIME0208");
+            if let Some(suggestion) = suggest_name(&module_name, &builtins) {
+                err = err.with_hint(format!("did you mean '{}'?", suggestion));
+            }
+            err
+        })?;
 
         let bind_name = alias.unwrap_or(&module_name).to_string();
         self.define(bind_name, module);
@@ -617,9 +794,13 @@ impl Runtime {
                 self.call_bound_method(*receiver, &method, args)
             }
             _ => Err(RuntimeError::new(format!(
-                "value '{}' is not callable",
+                "value '{}' is not callable (value: {}, type: {})",
+                callee.type_name(),
+                callee,
                 callee.type_name()
-            ))),
+            ))
+            .with_code("RUNTIME0102")
+            .with_hint("call a function, method, or native module member")),
         }
     }
 
@@ -638,26 +819,40 @@ impl Runtime {
         }
 
         self.push_scope();
+        self.call_stack
+            .push(format!("{}:1: fn {}", self.source_label, function.name));
         for (name, value) in function.params.iter().zip(args) {
             self.define(name.clone(), value);
         }
 
         let mut return_value = Value::Nil;
+        let mut function_error = None;
         for statement in &function.body {
-            match self.execute_statement(statement)? {
-                StmtFlow::Continue(_) => {}
-                StmtFlow::Return(value) => {
+            match self
+                .execute_statement(statement)
+                .map_err(|err| self.decorate_error(err))
+            {
+                Ok(StmtFlow::Continue(_)) => {}
+                Ok(StmtFlow::Return(value)) => {
                     return_value = value;
                     self.pending_return = None;
-                    self.pop_scope();
-                    return Ok(return_value);
+                    break;
+                }
+                Err(err) => {
+                    function_error = Some(err);
+                    break;
                 }
             }
         }
 
         self.pending_return = None;
         self.pop_scope();
-        Ok(return_value)
+        self.call_stack.pop();
+        if let Some(err) = function_error {
+            Err(err)
+        } else {
+            Ok(return_value)
+        }
     }
 
     fn call_native(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -771,10 +966,21 @@ impl Runtime {
                 expect_arity("string.lowercase", &args, 0)?;
                 Ok(Value::String(text.to_lowercase()))
             }
-            other => Err(RuntimeError::new(format!(
-                "unknown string method '{}'",
-                other
-            ))),
+            other => {
+                let candidates = vec![
+                    "trim".to_string(),
+                    "split".to_string(),
+                    "replace".to_string(),
+                    "uppercase".to_string(),
+                    "lowercase".to_string(),
+                ];
+                let mut err = RuntimeError::new(format!("unknown string method '{}'", other))
+                    .with_code("RUNTIME0203");
+                if let Some(suggestion) = suggest_name(other, &candidates) {
+                    err = err.with_hint(format!("did you mean '{}'?", suggestion));
+                }
+                Err(err)
+            }
         }
     }
 
@@ -842,10 +1048,23 @@ impl Runtime {
                 sort_values(&mut cloned)?;
                 Ok(Value::list(cloned))
             }
-            other => Err(RuntimeError::new(format!(
-                "unknown list method '{}'",
-                other
-            ))),
+            other => {
+                let candidates = vec![
+                    "push".to_string(),
+                    "pop".to_string(),
+                    "map".to_string(),
+                    "filter".to_string(),
+                    "reduce".to_string(),
+                    "sort".to_string(),
+                    "sorted".to_string(),
+                ];
+                let mut err = RuntimeError::new(format!("unknown list method '{}'", other))
+                    .with_code("RUNTIME0204");
+                if let Some(suggestion) = suggest_name(other, &candidates) {
+                    err = err.with_hint(format!("did you mean '{}'?", suggestion));
+                }
+                Err(err)
+            }
         }
     }
 
@@ -887,7 +1106,21 @@ impl Runtime {
                 let all_values = values.borrow().values().cloned().collect::<Vec<_>>();
                 Ok(Value::list(all_values))
             }
-            other => Err(RuntimeError::new(format!("unknown map method '{}'", other))),
+            other => {
+                let candidates = vec![
+                    "get".to_string(),
+                    "set".to_string(),
+                    "has".to_string(),
+                    "keys".to_string(),
+                    "values".to_string(),
+                ];
+                let mut err = RuntimeError::new(format!("unknown map method '{}'", other))
+                    .with_code("RUNTIME0205");
+                if let Some(suggestion) = suggest_name(other, &candidates) {
+                    err = err.with_hint(format!("did you mean '{}'?", suggestion));
+                }
+                Err(err)
+            }
         }
     }
 
@@ -929,10 +1162,21 @@ impl Runtime {
                 expect_arity("path.to_string", &args, 0)?;
                 Ok(Value::String(path.to_string_lossy().to_string()))
             }
-            other => Err(RuntimeError::new(format!(
-                "unknown path method '{}'",
-                other
-            ))),
+            other => {
+                let candidates = vec![
+                    "join".to_string(),
+                    "normalize".to_string(),
+                    "basename".to_string(),
+                    "dirname".to_string(),
+                    "to_string".to_string(),
+                ];
+                let mut err = RuntimeError::new(format!("unknown path method '{}'", other))
+                    .with_code("RUNTIME0206");
+                if let Some(suggestion) = suggest_name(other, &candidates) {
+                    err = err.with_hint(format!("did you mean '{}'?", suggestion));
+                }
+                Err(err)
+            }
         }
     }
 
@@ -958,10 +1202,16 @@ impl Runtime {
                     })?;
                 Ok(json_to_value(parsed))
             }
-            other => Err(RuntimeError::new(format!(
-                "unknown http response method '{}'",
-                other
-            ))),
+            other => {
+                let candidates = vec!["text".to_string(), "json".to_string()];
+                let mut err =
+                    RuntimeError::new(format!("unknown http response method '{}'", other))
+                        .with_code("RUNTIME0207");
+                if let Some(suggestion) = suggest_name(other, &candidates) {
+                    err = err.with_hint(format!("did you mean '{}'?", suggestion));
+                }
+                Err(err)
+            }
         }
     }
 
@@ -1299,10 +1549,15 @@ impl Runtime {
         }
 
         match object {
-            Value::Module(module) => module
-                .get(property)
-                .cloned()
-                .ok_or_else(|| RuntimeError::new(format!("module has no member '{}'", property))),
+            Value::Module(module) => module.get(property).cloned().ok_or_else(|| {
+                let mut err = RuntimeError::new(format!("module has no member '{}'", property))
+                    .with_code("RUNTIME0201");
+                let candidates = module.keys().cloned().collect::<Vec<_>>();
+                if let Some(suggestion) = suggest_name(property, &candidates) {
+                    err = err.with_hint(format!("did you mean '{}'?", suggestion));
+                }
+                err
+            }),
             Value::HttpResponse(response) => self.read_http_member(response, property),
             Value::HttpPending(pending) => {
                 if property == "text" || property == "json" {
@@ -1341,11 +1596,20 @@ impl Runtime {
                 method: property.to_string(),
             }),
             Value::Nil if optional => Ok(Value::Nil),
-            other => Err(RuntimeError::new(format!(
-                "type '{}' has no member '{}'",
-                other.type_name(),
+            Value::Nil => Err(RuntimeError::new(format!(
+                "cannot access member '{}' on nil (value: nil, type: nil)",
                 property
-            ))),
+            ))
+            .with_code("RUNTIME0200")
+            .with_hint("use optional chaining with '?.' or provide a default with 'or'")),
+            other => Err(RuntimeError::new(format!(
+                "type '{}' has no member '{}' (value: {})",
+                other.type_name(),
+                property,
+                other
+            ))
+            .with_code("RUNTIME0202")
+            .with_hint("check the value type before accessing members")),
         }
     }
 
@@ -1534,6 +1798,17 @@ impl Runtime {
 
     fn take_pending_return(&mut self) -> Option<Value> {
         self.pending_return.take()
+    }
+
+    fn decorate_error(&self, err: RuntimeError) -> RuntimeError {
+        let mut frames = Vec::new();
+        for frame in self.call_stack.iter().rev() {
+            frames.push(frame.clone());
+        }
+        if !self.source_label.is_empty() {
+            frames.push(format!("{}:1", self.source_label));
+        }
+        err.with_stack_frames(frames)
     }
 }
 
@@ -1833,6 +2108,48 @@ fn expect_arity(name: &str, args: &[Value], expected: usize) -> Result<(), Runti
             args.len()
         )))
     }
+}
+
+fn suggest_name(input: &str, candidates: &[String]) -> Option<String> {
+    let mut best: Option<(usize, &String)> = None;
+    for candidate in candidates {
+        let distance = levenshtein(input, candidate);
+        if distance <= 3 || candidate.starts_with(input) || input.starts_with(candidate) {
+            match best {
+                Some((best_distance, _)) if distance >= best_distance => {}
+                _ => best = Some((distance, candidate)),
+            }
+        }
+    }
+    best.map(|(_, value)| value.clone())
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    if a == b {
+        return 0;
+    }
+    if a.is_empty() {
+        return b.chars().count();
+    }
+    if b.is_empty() {
+        return a.chars().count();
+    }
+
+    let b_chars = b.chars().collect::<Vec<_>>();
+    let mut prev = (0..=b_chars.len()).collect::<Vec<_>>();
+    let mut curr = vec![0; b_chars.len() + 1];
+
+    for (i, ca) in a.chars().enumerate() {
+        curr[0] = i + 1;
+        for (j, cb) in b_chars.iter().enumerate() {
+            let cost = if ca == *cb { 0 } else { 1 };
+            curr[j + 1] =
+                std::cmp::min(std::cmp::min(curr[j] + 1, prev[j + 1] + 1), prev[j] + cost);
+        }
+        prev.clone_from(&curr);
+    }
+
+    prev[b_chars.len()]
 }
 
 fn expect_string(value: &Value, label: &str) -> Result<String, RuntimeError> {
