@@ -115,3 +115,31 @@ fn checks_test_and_assert_statements() {
     let output = check("test \"ok\" { assert 1 + 1 == 2 }").expect("typecheck should succeed");
     assert!(output.inferred_types.contains_key("len"));
 }
+
+#[test]
+fn checks_if_while_and_for_in_statements() {
+    let output = check(
+        "nums = [1, 2, 3]\n\
+         total = 0\n\
+         ok = false\n\
+         for n in nums { total = total + n }\n\
+         if total > 0 { ok = true } else { ok = false }\n\
+         while false { total = total + 1 }",
+    )
+    .expect("typecheck should succeed");
+
+    assert_eq!(output.inferred_types.get("total"), Some(&Type::Int));
+    assert_eq!(output.inferred_types.get("ok"), Some(&Type::Bool));
+}
+
+#[test]
+fn rejects_non_bool_loop_condition() {
+    let errors = check("while 123 { value = 1 }").expect_err("typecheck should fail");
+    assert!(
+        errors
+            .iter()
+            .any(|err| err.message.contains("while condition must be bool")),
+        "expected while condition type error, got: {:?}",
+        errors
+    );
+}

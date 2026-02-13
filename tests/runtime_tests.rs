@@ -133,6 +133,20 @@ fn evaluates_string_and_list_methods() {
 }
 
 #[test]
+fn evaluates_string_interpolation() {
+    let value = run("name = \"Rask\"\n\
+         count = 2 + 2\n\
+         \"Hello, {name}! {count}\"");
+    assert_eq!(value, Value::String("Hello, Rask! 4".to_string()));
+}
+
+#[test]
+fn keeps_escaped_braces_in_strings() {
+    let value = run("\"literal: \\{name\\}\"");
+    assert_eq!(value, Value::String("literal: {name}".to_string()));
+}
+
+#[test]
 fn evaluates_map_methods_and_indexing() {
     let value = run("m = {name: \"rask\"}\n\
          m.set(\"version\", 1)\n\
@@ -444,4 +458,88 @@ fn runs_test_blocks_and_reports_failures() {
     assert_eq!(report.results.len(), 2);
     assert!(report.results[0].passed);
     assert!(!report.results[1].passed);
+}
+
+#[test]
+fn evaluates_if_while_and_c_style_for() {
+    let value = run("sum = 0\n\
+         for i = 0; i < 5; i = i + 1 { sum = sum + i }\n\
+         while sum < 20 { sum = sum + 1 }\n\
+         if sum == 20 { \"ok\" } else { \"bad\" }");
+    assert_eq!(value, Value::String("ok".to_string()));
+}
+
+#[test]
+fn evaluates_for_in_on_list_string_and_map() {
+    let value = run("total = 0\n\
+         for n in [1, 2, 3] { total = total + n }\n\
+         chars = 0\n\
+         for ch in \"hi\" { chars = chars + len(ch) }\n\
+         keys = 0\n\
+         for key in {a: 1, b: 2} { keys = keys + len(key) }\n\
+         total + chars + keys");
+    assert_eq!(value, Value::Int(10));
+}
+
+#[test]
+fn resolves_pending_values_with_concurrency_join() {
+    let (url_a, _req_a, handle_a) =
+        spawn_http_server("{\"a\":1}", "application/json", Duration::from_millis(100));
+    let (url_b, _req_b, handle_b) =
+        spawn_http_server("{\"b\":1}", "application/json", Duration::from_millis(100));
+    let script = format!(
+        "a = http.get(\"{}\", 2000)\n\
+         b = http.get(\"{}\", 2000)\n\
+         all = concurrency.join([a, b])\n\
+         all[0].status + all[1].status",
+        url_a, url_b
+    );
+
+    let mut permissions = rask::runtime::Permissions::default();
+    permissions.allow_net.push("127.0.0.1".to_string());
+    let value = run_with_permissions(&script, permissions);
+    assert_eq!(value, Value::Int(400));
+
+    handle_a.join().expect("server A thread should finish");
+    handle_b.join().expect("server B thread should finish");
+}
+
+#[test]
+fn concurrency_timeout_returns_error_value() {
+    let (url, _req, handle) = spawn_http_server(
+        "{\"ok\":true}",
+        "application/json",
+        Duration::from_millis(120),
+    );
+    let script = format!(
+        "pending = http.get(\"{}\", 2000)\n\
+         concurrency.timeout(10, pending)",
+        url
+    );
+
+    let mut permissions = rask::runtime::Permissions::default();
+    permissions.allow_net.push("127.0.0.1".to_string());
+    let value = run_with_permissions(&script, permissions);
+    match value {
+        Value::Error(message) => {
+            assert!(
+                message.to_ascii_lowercase().contains("timed out"),
+                "expected timeout error message, got: {}",
+                message
+            );
+        }
+        other => panic!("expected Error value, got {:?}", other),
+    }
+
+    handle.join().expect("server thread should finish");
+}
+
+#[test]
+fn channel_send_and_recv_work() {
+    let value = run("ch = concurrency.channel()\n\
+         ch.send(1)\n\
+         ch.send(2)\n\
+         sum = ch.recv() + ch.try_recv()\n\
+         sum + ch.len()");
+    assert_eq!(value, Value::Int(3));
 }

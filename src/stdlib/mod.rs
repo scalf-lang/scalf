@@ -1,3 +1,4 @@
+pub mod concurrency;
 pub mod crypto;
 pub mod env;
 pub mod fs;

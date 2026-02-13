@@ -4,11 +4,13 @@ Rask is a scripting language prototype focused on predictability and zero-setup 
 
 ## Current Status
 
-Phase 1 scaffolding is in place:
+Phase 1 foundations are implemented:
 - Rust project structure
 - Lexer for core tokens (numbers, strings, identifiers, operators, punctuation, comments)
-- Recursive-descent parser for expressions, variable declarations, and print statements
-- REPL parser mode
+- Recursive-descent parser for expressions and statements
+- Control-flow statements: `if/else`, `while`, `for ... in`, C-style `for`
+- Function definitions/returns and collection literals/indexing
+- REPL read -> lex -> parse -> typecheck -> evaluate loop
 
 Phase 2 foundations are implemented:
 - Type model with nullable (`T?`), unions (`A | B`), generics (`List<T>`, `Map<K,V>`), and function types (`(A, B) -> R`)
@@ -29,9 +31,10 @@ Phase 3 foundations are implemented:
 - Grapheme-aware string length/index behavior
 - `Path` runtime type and `std.path`
 
-Phase 4 started:
-- Permission model and CLI flags: `--allow-read`, `--allow-write`, `--allow-net`, `--allow-env`, `--allow-all`
+Phase 4 foundations are implemented:
+- Permission model and CLI flags: `--allow-read`, `--allow-write`, `--allow-net`, `--allow-env`, `--allow-all`, `--prompt-permissions`
 - Runtime permission checks for filesystem, environment, and network access
+- Optional interactive permission prompt mode
 - Built-in `http` module: `get/post/put/delete` with optional headers and timeout
 - HTTP response API: `.status`, `.url`, `.headers`, `.text()`, `.json()`
 - HTTP calls start immediately and resolve lazily, enabling overlap for independent requests
@@ -54,6 +57,38 @@ Phase 6 foundations are implemented:
   - `rask check <file>` (typecheck + lint warnings)
   - `rask test <file>` with built-in `test`/`assert` syntax
 
+Phase 7 foundations are implemented:
+- Bytecode VM module with:
+  - Stack-based instruction set
+  - AST to bytecode compiler for core expressions/statements
+  - Bytecode interpreter
+  - Constant folding during compilation
+- Optional VM execution path: `rask --vm <file>`
+- Standalone build command:
+  - `rask build <file>`
+  - Embeds script source into the output binary
+  - Auto-selects minimal compile features per script (e.g. excludes `net` when HTTP/URL imports are unused)
+  - Target aliases: `linux-x64`, `windows-x64`, `macos-arm64`
+  - Triple passthrough via `--target=<triple>`
+  - Output control via `--out=<path>`
+- Startup benchmark command with target budget support:
+  - `rask startup <file>`
+  - `--iterations=<n>`, `--budget-ms=<ms>`, `--no-budget`, `--vm`
+
+Phase 8 partial foundations are implemented:
+- Concurrency helpers:
+  - `concurrency.await(value)` for pending async values
+  - `concurrency.join(list)` to resolve lists of pending values
+  - `concurrency.timeout(ms, value)` for bounded wait
+  - `concurrency.channel()` with `send/recv/try_recv/recv_timeout/len`
+- REPL improvements:
+  - Multi-line input when blocks/expressions are incomplete
+  - Syntax highlighting utilities and preview command
+  - Completion command (`:complete <prefix>`)
+  - Persistent history (`~/.rask/repl_history` by default)
+  - Evaluation timing output (`:timing on|off`)
+  - Inline docs (`:doc <symbol>`)
+
 ## Run (when Rust is installed)
 
 ```bash
@@ -63,4 +98,8 @@ cargo run -- docs
 cargo run -- fmt --check path/to/file.rask
 cargo run -- check path/to/file.rask
 cargo run -- test path/to/file.rask
+cargo run -- --vm path/to/file.rask
+cargo run -- build path/to/file.rask --target=linux-x64
+cargo run -- startup path/to/file.rask --iterations=25
+cargo run
 ```

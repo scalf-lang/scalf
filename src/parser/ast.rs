@@ -9,6 +9,26 @@ pub enum Stmt {
         target: UseTarget,
         alias: Option<String>,
     },
+    If {
+        condition: Expr,
+        then_branch: Vec<Stmt>,
+        else_branch: Option<Vec<Stmt>>,
+    },
+    While {
+        condition: Expr,
+        body: Vec<Stmt>,
+    },
+    For {
+        initializer: Option<Box<Stmt>>,
+        condition: Option<Expr>,
+        increment: Option<Expr>,
+        body: Vec<Stmt>,
+    },
+    ForIn {
+        item_name: String,
+        iterable: Expr,
+        body: Vec<Stmt>,
+    },
     Test {
         name: String,
         body: Vec<Stmt>,

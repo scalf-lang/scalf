@@ -5,6 +5,24 @@ Regenerate with `rask docs` (or `cargo run -- docs`).
 
 ## Modules
 
+### `std.concurrency`
+std.concurrency (reference module)
+
+Runtime-backed helpers for asynchronous/pending values and channels.
+
+Functions:
+- concurrency.await(value) -> resolved value
+- concurrency.join(list) -> list of resolved values
+- concurrency.timeout(ms, value) -> resolved value or Error(...)
+- concurrency.channel() -> channel object
+
+Channel methods:
+- channel.send(value) -> nil
+- channel.recv() -> value | nil
+- channel.try_recv() -> value | nil
+- channel.recv_timeout(ms) -> value | nil
+- channel.len() -> int
+
 ### `std.crypto`
 std.crypto (reference module)
 

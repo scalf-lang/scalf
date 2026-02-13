@@ -98,6 +98,7 @@ impl TypeChecker {
         global.insert("http".to_string(), Type::Unknown);
         global.insert("time".to_string(), Type::Unknown);
         global.insert("crypto".to_string(), Type::Unknown);
+        global.insert("concurrency".to_string(), Type::Unknown);
         global.insert(
             "Path".to_string(),
             Type::Function {
@@ -141,6 +142,94 @@ impl TypeChecker {
                     .unwrap_or_else(|| target.default_binding_name());
                 self.define(name, Type::Unknown);
             }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let condition_ty = self.infer_expr(condition, errors);
+                if !is_assignable(&condition_ty, &Type::Bool)
+                    && !matches!(condition_ty, Type::Unknown)
+                {
+                    errors.push(TypeError::new(format!(
+                        "if condition must be bool, got '{}'",
+                        condition_ty
+                    )));
+                }
+
+                self.push_scope();
+                for stmt in then_branch {
+                    self.check_statement(stmt, errors);
+                }
+                self.pop_scope();
+
+                if let Some(else_branch) = else_branch {
+                    self.push_scope();
+                    for stmt in else_branch {
+                        self.check_statement(stmt, errors);
+                    }
+                    self.pop_scope();
+                }
+            }
+            Stmt::While { condition, body } => {
+                let condition_ty = self.infer_expr(condition, errors);
+                if !is_assignable(&condition_ty, &Type::Bool)
+                    && !matches!(condition_ty, Type::Unknown)
+                {
+                    errors.push(TypeError::new(format!(
+                        "while condition must be bool, got '{}'",
+                        condition_ty
+                    )));
+                }
+                self.push_scope();
+                for stmt in body {
+                    self.check_statement(stmt, errors);
+                }
+                self.pop_scope();
+            }
+            Stmt::For {
+                initializer,
+                condition,
+                increment,
+                body,
+            } => {
+                self.push_scope();
+                if let Some(initializer) = initializer {
+                    self.check_statement(initializer, errors);
+                }
+                if let Some(condition) = condition {
+                    let condition_ty = self.infer_expr(condition, errors);
+                    if !is_assignable(&condition_ty, &Type::Bool)
+                        && !matches!(condition_ty, Type::Unknown)
+                    {
+                        errors.push(TypeError::new(format!(
+                            "for-loop condition must be bool, got '{}'",
+                            condition_ty
+                        )));
+                    }
+                }
+                for stmt in body {
+                    self.check_statement(stmt, errors);
+                }
+                if let Some(increment) = increment {
+                    let _ = self.infer_expr(increment, errors);
+                }
+                self.pop_scope();
+            }
+            Stmt::ForIn {
+                item_name,
+                iterable,
+                body,
+            } => {
+                let iterable_ty = self.infer_expr(iterable, errors);
+                let item_ty = self.infer_iterable_item_type(&iterable_ty, errors);
+                self.push_scope();
+                self.define(item_name.clone(), item_ty);
+                for stmt in body {
+                    self.check_statement(stmt, errors);
+                }
+                self.pop_scope();
+            }
             Stmt::Test { name: _, body } => {
                 self.push_scope();
                 for stmt in body {
@@ -177,6 +266,7 @@ impl TypeChecker {
             } => {
                 let inferred = self.infer_expr(initializer, errors);
                 let declared = self.parse_declared_type(type_annotation.as_deref(), name, errors);
+                let existing = self.lookup(name);
                 let final_type = if !matches!(declared, Type::Unknown) {
                     if !is_assignable(&inferred, &declared) {
                         errors.push(TypeError::new(format!(
@@ -185,10 +275,21 @@ impl TypeChecker {
                         )));
                     }
                     declared
+                } else if let Some(existing) = existing {
+                    if !is_assignable(&inferred, &existing)
+                        && !matches!(inferred, Type::Unknown)
+                        && !matches!(existing, Type::Unknown)
+                    {
+                        errors.push(TypeError::new(format!(
+                            "cannot assign value of type '{}' to variable '{}' of type '{}'",
+                            inferred, name, existing
+                        )));
+                    }
+                    existing
                 } else {
                     inferred
                 };
-                self.define(name.clone(), final_type);
+                self.assign_or_define(name.clone(), final_type);
             }
             Stmt::DestructureDecl {
                 pattern,
@@ -766,6 +867,22 @@ impl TypeChecker {
             )));
         }
         ctx.inferred_returns.push(return_type);
+    }
+
+    fn infer_iterable_item_type(&self, iterable_ty: &Type, errors: &mut Vec<TypeError>) -> Type {
+        match iterable_ty {
+            Type::List(inner) => (**inner).clone(),
+            Type::Map(_, _) => Type::String,
+            Type::String => Type::String,
+            Type::Unknown => Type::Unknown,
+            other => {
+                errors.push(TypeError::new(format!(
+                    "for-in requires list, map, or string iterable, got '{}'",
+                    other
+                )));
+                Type::Unknown
+            }
+        }
     }
 
     fn define(&mut self, name: String, ty: Type) {

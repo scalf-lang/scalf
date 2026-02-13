@@ -215,3 +215,65 @@ fn parses_test_block_and_assert() {
         _ => panic!("expected test statement"),
     }
 }
+
+#[test]
+fn parses_if_else_and_while() {
+    let statements = parse("if true { x = 1 } else { x = 2 }\nwhile x < 10 { x = x + 1 }");
+    match &statements[0] {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            assert!(matches!(condition, Expr::Bool(true)));
+            assert_eq!(then_branch.len(), 1);
+            assert!(else_branch.as_ref().is_some_and(|branch| branch.len() == 1));
+        }
+        _ => panic!("expected if statement"),
+    }
+
+    match &statements[1] {
+        Stmt::While { condition, body } => {
+            assert!(matches!(condition, Expr::Binary { .. }));
+            assert_eq!(body.len(), 1);
+        }
+        _ => panic!("expected while statement"),
+    }
+}
+
+#[test]
+fn parses_for_in_and_c_style_for() {
+    let statements =
+        parse("for item in items { print(item) }\nfor i = 0; i < 3; i = i + 1 { print(i) }");
+
+    match &statements[0] {
+        Stmt::ForIn {
+            item_name,
+            iterable,
+            body,
+        } => {
+            assert_eq!(item_name, "item");
+            assert!(matches!(iterable, Expr::Variable(name) if name == "items"));
+            assert_eq!(body.len(), 1);
+        }
+        _ => panic!("expected for-in statement"),
+    }
+
+    match &statements[1] {
+        Stmt::For {
+            initializer,
+            condition,
+            increment,
+            body,
+        } => {
+            assert!(matches!(
+                initializer.as_deref(),
+                Some(Stmt::VarDecl { name, .. }) if name == "i"
+            ));
+            assert!(matches!(condition, Some(Expr::Binary { .. })));
+            assert!(matches!(increment, Some(Expr::Assign { name, .. }) if name == "i"));
+            assert_eq!(body.len(), 1);
+        }
+        _ => panic!("expected c-style for statement"),
+    }
+}

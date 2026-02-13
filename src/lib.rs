@@ -8,3 +8,4 @@ pub mod repl;
 pub mod runtime;
 pub mod stdlib;
 pub mod typechecker;
+pub mod vm;

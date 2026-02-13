@@ -1,0 +1,10 @@
+{
+  "imports": {
+    "https://raw.githubusercontent.com/MINTILER-DEV/rask/main/examples/hello.rask@main": {
+      "sha256": "9314ca35f5b551d61985326c535d2e1c6ce41e7cf2d104c4f838971ec516d8e3",
+      "url": "https://raw.githubusercontent.com/MINTILER-DEV/rask/main/examples/hello.rask",
+      "version": "main"
+    }
+  },
+  "version": 1
+}

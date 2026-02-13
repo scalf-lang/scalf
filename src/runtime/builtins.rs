@@ -31,6 +31,7 @@ pub fn core_globals() -> HashMap<String, Value> {
     globals.insert("http".to_string(), http_module());
     globals.insert("time".to_string(), time_module());
     globals.insert("crypto".to_string(), crypto_module());
+    globals.insert("concurrency".to_string(), concurrency_module());
 
     globals
 }
@@ -173,6 +174,27 @@ fn crypto_module() -> Value {
     entries.insert(
         "sha256".to_string(),
         Value::NativeFunction("crypto.sha256".to_string()),
+    );
+    Value::Module(Rc::new(entries))
+}
+
+fn concurrency_module() -> Value {
+    let mut entries = HashMap::new();
+    entries.insert(
+        "await".to_string(),
+        Value::NativeFunction("concurrency.await".to_string()),
+    );
+    entries.insert(
+        "join".to_string(),
+        Value::NativeFunction("concurrency.join".to_string()),
+    );
+    entries.insert(
+        "timeout".to_string(),
+        Value::NativeFunction("concurrency.timeout".to_string()),
+    );
+    entries.insert(
+        "channel".to_string(),
+        Value::NativeFunction("concurrency.channel".to_string()),
     );
     Value::Module(Rc::new(entries))
 }

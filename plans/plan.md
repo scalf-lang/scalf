@@ -23,18 +23,18 @@
 
 #### Week 1-2: Lexer & Parser
 - [x] Set up Rust project structure
-- [ ] Implement lexer (tokenization)
+- [x] Implement lexer (tokenization)
   - Numbers (int, float)
   - Strings (with interpolation support)
   - Identifiers & keywords
   - Operators (+, -, *, /, ==, !=, <, >, etc.)
   - Punctuation ({}, [], (), comma, etc.)
-- [ ] Implement parser (recursive descent)
+- [x] Implement parser (recursive descent)
   - Expressions (binary ops, unary ops, literals)
   - Variable declarations
   - Print statements
-- [ ] Basic AST definitions
-- [ ] REPL loop
+- [x] Basic AST definitions
+- [x] REPL loop
   - Read input
   - Lex → Parse → Evaluate
   - Print result
@@ -43,14 +43,14 @@
 **Milestone**: `2 + 2` returns `4` in REPL
 
 #### Week 3-4: Control Flow & Functions
-- [ ] If/else statements
-- [ ] While loops
-- [ ] For loops (both C-style and for-in)
-- [ ] Function definitions
+- [x] If/else statements
+- [x] While loops
+- [x] For loops (both C-style and for-in)
+- [x] Function definitions
   - Basic parameter passing
   - Return statements
   - Local scopes
-- [ ] Basic collections
+- [x] Basic collections
   - Lists `[1, 2, 3]`
   - Maps `{key: value}`
   - Indexing and iteration
@@ -147,7 +147,7 @@
   - Check before fs operations
   - Check before network operations
   - Check before env access
-- [ ] Permission prompts (optional interactive mode)
+- [x] Permission prompts (optional interactive mode)
 - [x] Graceful error messages when denied
 
 #### Week 15-16: HTTP Client
@@ -235,24 +235,24 @@
 **Goal**: Fast startup, good runtime performance, binary compilation
 
 #### Week 25-27: Bytecode VM
-- [ ] Design bytecode format
-- [ ] Compile AST to bytecode
-- [ ] Bytecode interpreter
+- [x] Design bytecode format
+- [x] Compile AST to bytecode
+- [x] Bytecode interpreter
   - Stack-based VM
   - Register-based VM (evaluate which)
-- [ ] Optimize common patterns
-- [ ] Fast startup (<10ms target)
+- [x] Optimize common patterns
+- [x] Fast startup (<10ms target)
 
 #### Week 28-30: Binary Compilation
-- [ ] `rask build` command
+- [x] `rask build` command
   - Compile script to standalone binary
   - Embed runtime
   - Cross-platform support
-- [ ] Cross-compilation
+- [x] Cross-compilation
   - `--target linux-x64`
   - `--target windows-x64`
   - `--target macos-arm64`
-- [ ] Optimize binary size
+- [x] Optimize binary size
 
 **Milestone**: Scripts start instantly, can be distributed as binaries
 
@@ -263,13 +263,13 @@
 **Goal**: Features that make Rask delightful
 
 #### Week 31-32: Concurrency
-- [ ] Async runtime
+- [x] Async runtime
   - Automatic concurrency for independent operations
   - Await/join operations when values needed
-- [ ] Timeout support
+- [x] Timeout support
   - `timeout(5s) { ... }` blocks
   - Automatic cancellation
-- [ ] Channels/communication (if needed)
+- [x] Channels/communication (if needed)
 
 #### Week 33-34: LSP (Language Server Protocol)
 - [ ] `rask lsp` command
@@ -281,12 +281,12 @@
 - [ ] Works with any LSP-compatible editor
 
 #### Week 35-36: REPL Improvements
-- [ ] Multi-line editing
-- [ ] Syntax highlighting
-- [ ] Auto-completion
-- [ ] History
-- [ ] Performance timing display
-- [ ] Inline documentation
+- [x] Multi-line editing
+- [x] Syntax highlighting
+- [x] Auto-completion
+- [x] History
+- [x] Performance timing display
+- [x] Inline documentation
 
 **Milestone**: Professional IDE experience
 
@@ -632,7 +632,7 @@ rask/
 
 ---
 
-**Last Updated**: 2026-02-12
+**Last Updated**: 2026-02-13
 **Next Review**: After Phase 1 completion
 
 ---

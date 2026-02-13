@@ -1,6 +1,6 @@
-#!/usr/bin/env rask --allow-net=api.example.com
+#!/usr/bin/env rask --allow-net=www.google.com
 use std.http
 
-response = http.get("https://api.example.com/health")
+response = http.get("https://www.google.com/") // lol
 print(response.status)
 

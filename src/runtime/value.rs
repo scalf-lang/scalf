@@ -1,10 +1,10 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
 use crate::parser::ast::Stmt;
 
@@ -29,22 +29,35 @@ pub struct PendingHttp {
 }
 
 struct PendingHttpState {
-    handle: Option<JoinHandle<Result<HttpResponseData, String>>>,
+    receiver: Option<mpsc::Receiver<Result<HttpResponseData, String>>>,
     result: Option<Result<HttpResponseData, String>>,
 }
 
 impl PendingHttp {
     pub fn spawn(task: impl FnOnce() -> Result<HttpResponseData, String> + Send + 'static) -> Self {
-        let handle = std::thread::spawn(task);
+        let (tx, rx) = mpsc::channel::<Result<HttpResponseData, String>>();
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(task))
+                .map_err(|_| "http request worker panicked".to_string())
+                .and_then(|res| res);
+            let _ = tx.send(result);
+        });
         Self {
             inner: Arc::new(Mutex::new(PendingHttpState {
-                handle: Some(handle),
+                receiver: Some(rx),
                 result: None,
             })),
         }
     }
 
     pub fn resolve(&self) -> Result<HttpResponseData, String> {
+        self.resolve_with_timeout(None)
+    }
+
+    pub fn resolve_with_timeout(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<HttpResponseData, String> {
         let maybe_cached = {
             let state = self
                 .inner
@@ -56,25 +69,33 @@ impl PendingHttp {
             return result;
         }
 
-        let handle = {
-            let mut state = self
-                .inner
-                .lock()
-                .map_err(|_| "http request state lock poisoned".to_string())?;
-            state.handle.take()
-        };
-        let Some(handle) = handle else {
-            return Err("http request missing execution handle".to_string());
-        };
-
-        let result = handle
-            .join()
-            .map_err(|_| "http request worker panicked".to_string())?;
-
         let mut state = self
             .inner
             .lock()
             .map_err(|_| "http request state lock poisoned".to_string())?;
+        let Some(receiver) = state.receiver.as_ref() else {
+            return Err("http request missing execution handle".to_string());
+        };
+
+        let result = match timeout {
+            Some(duration) => match receiver.recv_timeout(duration) {
+                Ok(result) => result,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(format!(
+                        "http request timed out after {}ms",
+                        duration.as_millis()
+                    ));
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("http request worker disconnected".to_string());
+                }
+            },
+            None => receiver
+                .recv()
+                .map_err(|_| "http request worker disconnected".to_string())?,
+        };
+
+        state.receiver = None;
         state.result = Some(result.clone());
         result
     }
@@ -83,6 +104,44 @@ impl PendingHttp {
 impl fmt::Debug for PendingHttp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "PendingHttp")
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Channel {
+    queue: Rc<RefCell<VecDeque<Value>>>,
+}
+
+impl Channel {
+    pub fn new() -> Self {
+        Self {
+            queue: Rc::new(RefCell::new(VecDeque::new())),
+        }
+    }
+
+    pub fn send(&self, value: Value) {
+        self.queue.borrow_mut().push_back(value);
+    }
+
+    pub fn recv(&self) -> Option<Value> {
+        self.queue.borrow_mut().pop_front()
+    }
+
+    pub fn recv_timeout(&self, timeout: Duration) -> Option<Value> {
+        let started = std::time::Instant::now();
+        loop {
+            if let Some(value) = self.recv() {
+                return Some(value);
+            }
+            if started.elapsed() >= timeout {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.queue.borrow().len()
     }
 }
 
@@ -106,6 +165,7 @@ pub enum Value {
     Error(String),
     HttpResponse(HttpResponseData),
     HttpPending(PendingHttp),
+    Channel(Channel),
 }
 
 impl PartialEq for Value {
@@ -120,6 +180,7 @@ impl PartialEq for Value {
             (Value::Error(a), Value::Error(b)) => a == b,
             (Value::HttpResponse(a), Value::HttpResponse(b)) => a == b,
             (Value::HttpPending(a), Value::HttpPending(b)) => Arc::ptr_eq(&a.inner, &b.inner),
+            (Value::Channel(a), Value::Channel(b)) => Rc::ptr_eq(&a.queue, &b.queue),
             (Value::List(a), Value::List(b)) => *a.borrow() == *b.borrow(),
             (Value::Map(a), Value::Map(b)) => *a.borrow() == *b.borrow(),
             _ => false,
@@ -147,7 +208,7 @@ impl Value {
             Value::List(values) => !values.borrow().is_empty(),
             Value::Map(values) => !values.borrow().is_empty(),
             Value::Error(_) => false,
-            Value::HttpResponse(_) | Value::HttpPending(_) => true,
+            Value::HttpResponse(_) | Value::HttpPending(_) | Value::Channel(_) => true,
             Value::UserFunction(_)
             | Value::NativeFunction(_)
             | Value::Module(_)
@@ -172,6 +233,7 @@ impl Value {
             Value::Error(_) => "error",
             Value::HttpResponse(_) => "http_response",
             Value::HttpPending(_) => "http_pending",
+            Value::Channel(_) => "channel",
         }
     }
 }
@@ -212,6 +274,7 @@ impl fmt::Display for Value {
                 write!(f, "<http {} {}>", response.status, response.url)
             }
             Value::HttpPending(_) => write!(f, "<http pending>"),
+            Value::Channel(channel) => write!(f, "<channel len={}>", channel.len()),
         }
     }
 }

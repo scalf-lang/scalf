@@ -18,6 +18,52 @@ pub fn lint_program(program: &Program) -> Vec<LintWarning> {
 fn lint_statement(statement: &Stmt, warnings: &mut Vec<LintWarning>) {
     match statement {
         Stmt::Use { .. } => {}
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            lint_expr(condition, warnings);
+            for stmt in then_branch {
+                lint_statement(stmt, warnings);
+            }
+            if let Some(else_branch) = else_branch {
+                for stmt in else_branch {
+                    lint_statement(stmt, warnings);
+                }
+            }
+        }
+        Stmt::While { condition, body } => {
+            lint_expr(condition, warnings);
+            for stmt in body {
+                lint_statement(stmt, warnings);
+            }
+        }
+        Stmt::For {
+            initializer,
+            condition,
+            increment,
+            body,
+        } => {
+            if let Some(initializer) = initializer {
+                lint_statement(initializer, warnings);
+            }
+            if let Some(condition) = condition {
+                lint_expr(condition, warnings);
+            }
+            if let Some(increment) = increment {
+                lint_expr(increment, warnings);
+            }
+            for stmt in body {
+                lint_statement(stmt, warnings);
+            }
+        }
+        Stmt::ForIn { iterable, body, .. } => {
+            lint_expr(iterable, warnings);
+            for stmt in body {
+                lint_statement(stmt, warnings);
+            }
+        }
         Stmt::Test { name, body } => {
             if body.is_empty() {
                 warnings.push(LintWarning {

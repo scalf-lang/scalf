@@ -4,8 +4,11 @@ pub mod value;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
+#[cfg(feature = "net")]
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "net")]
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -13,7 +16,7 @@ use crate::parser::ast::{
     BinaryOp, Expr, MapEntryExpr, MatchArm, Pattern, Program, Stmt, UnaryOp, UseTarget,
 };
 
-use self::value::{HttpResponseData, PendingHttp, UserFunction, Value};
+use self::value::{Channel, HttpResponseData, PendingHttp, UserFunction, Value};
 use sha2::{Digest, Sha256};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -24,6 +27,7 @@ pub struct Permissions {
     pub allow_write: Vec<PathBuf>,
     pub allow_net: Vec<String>,
     pub allow_env: bool,
+    pub prompt_permissions: bool,
 }
 
 impl Permissions {
@@ -34,17 +38,20 @@ impl Permissions {
             allow_write: Vec::new(),
             allow_net: Vec::new(),
             allow_env: true,
+            prompt_permissions: false,
         }
     }
 
     pub fn check_read(&self, path: &Path) -> Result<(), RuntimeError> {
         if self.allow_all || self.is_allowed(path, &self.allow_read) {
             Ok(())
+        } else if self.prompt_once("read", &path.display().to_string()) {
+            Ok(())
         } else {
             Err(
                 RuntimeError::new(format!("read access denied for '{}'", path.display()))
                     .with_code("RUNTIME0401")
-                    .with_hint("pass --allow-read=<path> or --allow-all"),
+                    .with_hint("pass --allow-read=<path>, --prompt-permissions, or --allow-all"),
             )
         }
     }
@@ -52,11 +59,13 @@ impl Permissions {
     pub fn check_write(&self, path: &Path) -> Result<(), RuntimeError> {
         if self.allow_all || self.is_allowed(path, &self.allow_write) {
             Ok(())
+        } else if self.prompt_once("write", &path.display().to_string()) {
+            Ok(())
         } else {
             Err(
                 RuntimeError::new(format!("write access denied for '{}'", path.display()))
                     .with_code("RUNTIME0402")
-                    .with_hint("pass --allow-write=<path> or --allow-all"),
+                    .with_hint("pass --allow-write=<path>, --prompt-permissions, or --allow-all"),
             )
         }
     }
@@ -64,11 +73,13 @@ impl Permissions {
     pub fn check_env(&self, key: &str) -> Result<(), RuntimeError> {
         if self.allow_all || self.allow_env {
             Ok(())
+        } else if self.prompt_once("env", key) {
+            Ok(())
         } else {
             Err(
                 RuntimeError::new(format!("environment access denied for '{}'", key))
                     .with_code("RUNTIME0403")
-                    .with_hint("pass --allow-env or --allow-all"),
+                    .with_hint("pass --allow-env, --prompt-permissions, or --allow-all"),
             )
         }
     }
@@ -79,21 +90,19 @@ impl Permissions {
         }
 
         if self.allow_net.is_empty() {
+            if self.prompt_once("net", url) {
+                return Ok(());
+            }
             return Err(
                 RuntimeError::new(format!("network access denied for '{}'", url))
                     .with_code("RUNTIME0404")
-                    .with_hint("pass --allow-net=<domain> or --allow-all"),
+                    .with_hint("pass --allow-net=<domain>, --prompt-permissions, or --allow-all"),
             );
         }
 
-        let parsed = reqwest::Url::parse(url)
-            .map_err(|err| RuntimeError::new(format!("invalid URL '{}': {}", url, err)))?;
-
-        let host = parsed
-            .host_str()
-            .ok_or_else(|| RuntimeError::new(format!("URL has no host: '{}'", url)))?
-            .to_ascii_lowercase();
-        let host_port = if let Some(port) = parsed.port() {
+        let (host, port) = extract_host_and_port(url)
+            .ok_or_else(|| RuntimeError::new(format!("invalid URL '{}'", url)))?;
+        let host_port = if let Some(port) = port {
             format!("{}:{}", host, port)
         } else {
             host.clone()
@@ -115,6 +124,8 @@ impl Permissions {
 
         if allowed {
             Ok(())
+        } else if self.prompt_once("net", &host) {
+            Ok(())
         } else {
             Err(RuntimeError::new(format!(
                 "network access denied for host '{}'; allowed: {}",
@@ -122,7 +133,9 @@ impl Permissions {
                 self.allow_net.join(",")
             ))
             .with_code("RUNTIME0404")
-            .with_hint("allow this host with --allow-net=<domain> or use --allow-all"))
+            .with_hint(
+                "allow this host with --allow-net=<domain>, --prompt-permissions, or --allow-all",
+            ))
         }
     }
 
@@ -134,6 +147,13 @@ impl Permissions {
         allowed_roots
             .iter()
             .any(|root| normalized_path.starts_with(root))
+    }
+
+    fn prompt_once(&self, access_kind: &str, target: &str) -> bool {
+        if !self.prompt_permissions {
+            return false;
+        }
+        prompt_permission(access_kind, target)
     }
 }
 
@@ -221,7 +241,9 @@ pub struct Runtime {
     scopes: Vec<HashMap<String, Value>>,
     pending_return: Option<Value>,
     permissions: Permissions,
+    #[cfg(feature = "net")]
     loaded_url_modules: HashMap<String, Value>,
+    #[cfg(feature = "net")]
     import_stack: Vec<String>,
     call_stack: Vec<String>,
     source_label: String,
@@ -237,7 +259,9 @@ impl Runtime {
             scopes: vec![builtins::core_globals()],
             pending_return: None,
             permissions,
+            #[cfg(feature = "net")]
             loaded_url_modules: HashMap::new(),
+            #[cfg(feature = "net")]
             import_stack: Vec::new(),
             call_stack: Vec::new(),
             source_label: "<script>".to_string(),
@@ -359,6 +383,121 @@ impl Runtime {
                 self.execute_use(target, alias.as_deref())?;
                 Ok(StmtFlow::Continue(Value::Nil))
             }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let condition_value = self.eval_expr(condition)?;
+                if let Some(ret) = self.take_pending_return() {
+                    return Ok(StmtFlow::Return(ret));
+                }
+                if condition_value.is_truthy() {
+                    self.execute_scoped_block(then_branch)
+                } else if let Some(else_branch) = else_branch {
+                    self.execute_scoped_block(else_branch)
+                } else {
+                    Ok(StmtFlow::Continue(Value::Nil))
+                }
+            }
+            Stmt::While { condition, body } => {
+                let mut last_value = Value::Nil;
+                loop {
+                    let condition_value = self.eval_expr(condition)?;
+                    if let Some(ret) = self.take_pending_return() {
+                        return Ok(StmtFlow::Return(ret));
+                    }
+                    if !condition_value.is_truthy() {
+                        break;
+                    }
+
+                    match self.execute_scoped_block(body)? {
+                        StmtFlow::Continue(value) => last_value = value,
+                        StmtFlow::Return(value) => return Ok(StmtFlow::Return(value)),
+                    }
+                }
+                Ok(StmtFlow::Continue(last_value))
+            }
+            Stmt::For {
+                initializer,
+                condition,
+                increment,
+                body,
+            } => {
+                self.push_scope();
+                let result = (|| -> Result<StmtFlow, RuntimeError> {
+                    if let Some(initializer) = initializer {
+                        match self.execute_statement(initializer)? {
+                            StmtFlow::Continue(_) => {}
+                            StmtFlow::Return(value) => return Ok(StmtFlow::Return(value)),
+                        }
+                    }
+
+                    let mut last_value = Value::Nil;
+                    loop {
+                        if let Some(condition) = condition {
+                            let condition_value = self.eval_expr(condition)?;
+                            if let Some(ret) = self.take_pending_return() {
+                                return Ok(StmtFlow::Return(ret));
+                            }
+                            if !condition_value.is_truthy() {
+                                break;
+                            }
+                        }
+
+                        match self.execute_scoped_block(body)? {
+                            StmtFlow::Continue(value) => last_value = value,
+                            StmtFlow::Return(value) => return Ok(StmtFlow::Return(value)),
+                        }
+
+                        if let Some(increment) = increment {
+                            let value = self.eval_expr(increment)?;
+                            if let Some(ret) = self.take_pending_return() {
+                                return Ok(StmtFlow::Return(ret));
+                            }
+                            last_value = value;
+                        }
+                    }
+
+                    Ok(StmtFlow::Continue(last_value))
+                })();
+                self.pop_scope();
+                result
+            }
+            Stmt::ForIn {
+                item_name,
+                iterable,
+                body,
+            } => {
+                let iterable_value = self.eval_expr(iterable)?;
+                if let Some(ret) = self.take_pending_return() {
+                    return Ok(StmtFlow::Return(ret));
+                }
+
+                let items = iterable_values(iterable_value)?;
+                self.push_scope();
+                let result = (|| -> Result<StmtFlow, RuntimeError> {
+                    let mut last_value = Value::Nil;
+                    let mut initialized = false;
+                    for item in items {
+                        if initialized {
+                            self.assign(item_name, item)?;
+                        } else {
+                            self.define(item_name.clone(), item);
+                            initialized = true;
+                        }
+
+                        match self.execute_scoped_block(body)? {
+                            StmtFlow::Continue(value) => last_value = value,
+                            StmtFlow::Return(value) => return Ok(StmtFlow::Return(value)),
+                        }
+                    }
+
+                    Ok(StmtFlow::Continue(last_value))
+                })();
+                self.pop_scope();
+                result
+            }
             Stmt::Test { .. } => Ok(StmtFlow::Continue(Value::Nil)),
             Stmt::Assert { condition, message } => {
                 let result = self.eval_expr(condition)?;
@@ -387,7 +526,7 @@ impl Runtime {
                 if let Some(ret) = self.take_pending_return() {
                     return Ok(StmtFlow::Return(ret));
                 }
-                self.define(name.clone(), value.clone());
+                self.assign_or_define(name.clone(), value.clone());
                 Ok(StmtFlow::Continue(value))
             }
             Stmt::DestructureDecl {
@@ -440,6 +579,24 @@ impl Runtime {
         }
     }
 
+    fn execute_block(&mut self, statements: &[Stmt]) -> Result<StmtFlow, RuntimeError> {
+        let mut last_value = Value::Nil;
+        for statement in statements {
+            match self.execute_statement(statement)? {
+                StmtFlow::Continue(value) => last_value = value,
+                StmtFlow::Return(value) => return Ok(StmtFlow::Return(value)),
+            }
+        }
+        Ok(StmtFlow::Continue(last_value))
+    }
+
+    fn execute_scoped_block(&mut self, statements: &[Stmt]) -> Result<StmtFlow, RuntimeError> {
+        self.push_scope();
+        let result = self.execute_block(statements);
+        self.pop_scope();
+        result
+    }
+
     fn execute_use(&mut self, target: &UseTarget, alias: Option<&str>) -> Result<(), RuntimeError> {
         match target {
             UseTarget::ModulePath(path) => self.execute_module_use(path, alias),
@@ -478,43 +635,57 @@ impl Runtime {
     }
 
     fn execute_url_use(&mut self, spec: &str, alias: Option<&str>) -> Result<(), RuntimeError> {
-        let cache_key = spec.to_string();
-        if let Some(module) = self.loaded_url_modules.get(&cache_key).cloned() {
+        #[cfg(not(feature = "net"))]
+        {
+            let _ = (spec, alias);
+            return Err(RuntimeError::new(
+                "URL imports require a net-enabled build; rebuild with feature 'net'",
+            )
+            .with_code("RUNTIME0501")
+            .with_hint("run `rask build <file>` without disabling network feature"));
+        }
+
+        #[cfg(feature = "net")]
+        {
+            let cache_key = spec.to_string();
+            if let Some(module) = self.loaded_url_modules.get(&cache_key).cloned() {
+                let bind_name = alias
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| UseTarget::Url(cache_key.clone()).default_binding_name());
+                self.define(bind_name, module);
+                return Ok(());
+            }
+
+            if self.import_stack.contains(&cache_key) {
+                return Err(RuntimeError::new(format!(
+                    "circular URL import detected: {}",
+                    self.import_stack.join(" -> ")
+                )));
+            }
+
+            self.import_stack.push(cache_key.clone());
+            let loaded = (|| {
+                let resolved = resolve_url_import(spec, &self.permissions)?;
+                let mut module_runtime = Runtime::with_permissions(self.permissions.clone());
+                module_runtime.import_stack = self.import_stack.clone();
+                module_runtime.loaded_url_modules = self.loaded_url_modules.clone();
+                let module = module_runtime.evaluate_imported_module(&resolved.source, spec)?;
+                Ok(module)
+            })();
+            self.import_stack.pop();
+
+            let module = loaded?;
+            self.loaded_url_modules
+                .insert(cache_key.clone(), module.clone());
             let bind_name = alias
                 .map(ToString::to_string)
-                .unwrap_or_else(|| UseTarget::Url(cache_key.clone()).default_binding_name());
+                .unwrap_or_else(|| UseTarget::Url(cache_key).default_binding_name());
             self.define(bind_name, module);
-            return Ok(());
+            Ok(())
         }
-
-        if self.import_stack.contains(&cache_key) {
-            return Err(RuntimeError::new(format!(
-                "circular URL import detected: {}",
-                self.import_stack.join(" -> ")
-            )));
-        }
-
-        self.import_stack.push(cache_key.clone());
-        let loaded = (|| {
-            let resolved = resolve_url_import(spec, &self.permissions)?;
-            let mut module_runtime = Runtime::with_permissions(self.permissions.clone());
-            module_runtime.import_stack = self.import_stack.clone();
-            module_runtime.loaded_url_modules = self.loaded_url_modules.clone();
-            let module = module_runtime.evaluate_imported_module(&resolved.source, spec)?;
-            Ok(module)
-        })();
-        self.import_stack.pop();
-
-        let module = loaded?;
-        self.loaded_url_modules
-            .insert(cache_key.clone(), module.clone());
-        let bind_name = alias
-            .map(ToString::to_string)
-            .unwrap_or_else(|| UseTarget::Url(cache_key).default_binding_name());
-        self.define(bind_name, module);
-        Ok(())
     }
 
+    #[cfg(feature = "net")]
     fn evaluate_imported_module(
         &mut self,
         source: &str,
@@ -563,7 +734,16 @@ impl Runtime {
         match expr {
             Expr::Int(value) => Ok(Value::Int(*value)),
             Expr::Float(value) => Ok(Value::Float(*value)),
-            Expr::String { value, .. } => Ok(Value::String(value.clone())),
+            Expr::String {
+                value,
+                has_interpolation,
+            } => {
+                if *has_interpolation {
+                    Ok(Value::String(self.interpolate_string(value)?))
+                } else {
+                    Ok(Value::String(value.clone()))
+                }
+            }
             Expr::Bool(value) => Ok(Value::Bool(*value)),
             Expr::Nil => Ok(Value::Nil),
             Expr::Variable(name) => self
@@ -695,6 +875,55 @@ impl Runtime {
                 self.eval_index(object_value, index_value)
             }
         }
+    }
+
+    fn interpolate_string(&mut self, template: &str) -> Result<String, RuntimeError> {
+        let mut rendered = String::with_capacity(template.len());
+        let mut cursor = 0usize;
+
+        while let Some(open_rel) = template[cursor..].find('{') {
+            let open = cursor + open_rel;
+            rendered.push_str(&template[cursor..open]);
+
+            let close = find_interpolation_end(template, open + 1)?;
+            let expr_source = template[open + 1..close].trim();
+            if expr_source.is_empty() {
+                return Err(RuntimeError::new(
+                    "string interpolation expression cannot be empty",
+                ));
+            }
+
+            let value = self.eval_interpolation_expression(expr_source)?;
+            rendered.push_str(&value.to_string());
+            cursor = close + 1;
+        }
+
+        if cursor < template.len() {
+            rendered.push_str(&template[cursor..]);
+        }
+
+        Ok(rendered)
+    }
+
+    fn eval_interpolation_expression(&mut self, source: &str) -> Result<Value, RuntimeError> {
+        let tokens = crate::lexer::lex(source).map_err(|err| {
+            RuntimeError::new(format!(
+                "invalid interpolation expression: lex error at {}:{}: {}",
+                err.line, err.column, err.message
+            ))
+        })?;
+        let mut parser = crate::parser::Parser::new(tokens);
+        let expr = parser.expression().map_err(|err| {
+            RuntimeError::new(format!("invalid interpolation expression: {}", err))
+        })?;
+        parser.skip_statement_breaks();
+        if !parser.is_at_end() {
+            return Err(RuntimeError::new(
+                "invalid interpolation expression: unexpected trailing tokens",
+            ));
+        }
+
+        self.eval_expr(&expr)
     }
 
     fn eval_binary(
@@ -898,6 +1127,10 @@ impl Runtime {
             "time.now_s" => self.native_time_now_s(args),
             "time.sleep" => self.native_time_sleep(args),
             "crypto.sha256" => self.native_crypto_sha256(args),
+            "concurrency.await" => self.native_concurrency_await(args),
+            "concurrency.join" => self.native_concurrency_join(args),
+            "concurrency.timeout" => self.native_concurrency_timeout(args),
+            "concurrency.channel" => self.native_concurrency_channel(args),
             "http.get" => self.native_http_get(args),
             "http.post" => self.native_http_post(args),
             "http.put" => self.native_http_put(args),
@@ -925,6 +1158,7 @@ impl Runtime {
                 let response = self.resolve_http_pending(&pending)?;
                 self.call_http_response_method(response, method, args)
             }
+            Value::Channel(channel) => self.call_channel_method(channel, method, args),
             other => Err(RuntimeError::new(format!(
                 "type '{}' has no methods",
                 other.type_name()
@@ -1215,6 +1449,53 @@ impl Runtime {
         }
     }
 
+    fn call_channel_method(
+        &self,
+        channel: Channel,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        match method {
+            "send" => {
+                expect_arity("channel.send", &args, 1)?;
+                channel.send(args[0].clone());
+                Ok(Value::Nil)
+            }
+            "recv" => {
+                expect_arity("channel.recv", &args, 0)?;
+                Ok(channel.recv().unwrap_or(Value::Nil))
+            }
+            "try_recv" => {
+                expect_arity("channel.try_recv", &args, 0)?;
+                Ok(channel.recv().unwrap_or(Value::Nil))
+            }
+            "recv_timeout" => {
+                expect_arity("channel.recv_timeout", &args, 1)?;
+                let Value::Int(ms) = args[0] else {
+                    return Err(RuntimeError::new(format!(
+                        "channel.recv_timeout expected int milliseconds, got '{}'",
+                        args[0].type_name()
+                    )));
+                };
+                if ms <= 0 {
+                    return Err(RuntimeError::new(
+                        "channel.recv_timeout timeout must be > 0 milliseconds",
+                    ));
+                }
+                let timeout = Duration::from_millis(ms as u64);
+                Ok(channel.recv_timeout(timeout).unwrap_or(Value::Nil))
+            }
+            "len" => {
+                expect_arity("channel.len", &args, 0)?;
+                Ok(Value::Int(channel.len() as i64))
+            }
+            other => Err(RuntimeError::new(format!(
+                "channel has no method '{}'",
+                other
+            ))),
+        }
+    }
+
     fn native_map_constructor(&self, args: Vec<Value>) -> Result<Value, RuntimeError> {
         if args.len() % 2 != 0 {
             return Err(RuntimeError::new(
@@ -1287,38 +1568,48 @@ impl Runtime {
     }
 
     fn native_http_get(&self, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        self.native_http_request(reqwest::Method::GET, args, false)
+        self.native_http_request("get", args, false)
     }
 
     fn native_http_post(&self, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        self.native_http_request(reqwest::Method::POST, args, true)
+        self.native_http_request("post", args, true)
     }
 
     fn native_http_put(&self, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        self.native_http_request(reqwest::Method::PUT, args, true)
+        self.native_http_request("put", args, true)
     }
 
     fn native_http_delete(&self, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        self.native_http_request(reqwest::Method::DELETE, args, false)
+        self.native_http_request("delete", args, false)
     }
 
+    #[cfg(feature = "net")]
     fn native_http_request(
         &self,
-        method: reqwest::Method,
+        method_name: &str,
         args: Vec<Value>,
         with_body: bool,
     ) -> Result<Value, RuntimeError> {
+        let method = match method_name {
+            "get" => reqwest::Method::GET,
+            "post" => reqwest::Method::POST,
+            "put" => reqwest::Method::PUT,
+            "delete" => reqwest::Method::DELETE,
+            other => {
+                return Err(RuntimeError::new(format!(
+                    "unsupported http method '{}'",
+                    other
+                )))
+            }
+        };
         if args.is_empty() {
             return Err(RuntimeError::new(format!(
                 "http.{} expects at least a URL argument",
-                method.as_str().to_lowercase()
+                method_name
             )));
         }
 
-        let url = expect_string(
-            &args[0],
-            &format!("http.{} url", method.as_str().to_lowercase()),
-        )?;
+        let url = expect_string(&args[0], &format!("http.{} url", method_name))?;
         self.permissions.check_net(&url)?;
 
         let mut cursor = 1;
@@ -1326,7 +1617,7 @@ impl Runtime {
             if args.len() < 2 {
                 return Err(RuntimeError::new(format!(
                     "http.{} expects a request body argument",
-                    method.as_str().to_lowercase()
+                    method_name
                 )));
             }
             cursor = 2;
@@ -1351,13 +1642,13 @@ impl Runtime {
                 Value::Int(_) => {
                     return Err(RuntimeError::new(format!(
                         "http.{} timeout must be > 0 milliseconds",
-                        method.as_str().to_lowercase()
+                        method_name
                     )));
                 }
                 other => {
                     return Err(RuntimeError::new(format!(
                         "http.{} optional argument must be headers map or timeout int, got '{}'",
-                        method.as_str().to_lowercase(),
+                        method_name,
                         other.type_name()
                     )));
                 }
@@ -1373,13 +1664,13 @@ impl Runtime {
                 Value::Int(_) => {
                     return Err(RuntimeError::new(format!(
                         "http.{} timeout must be > 0 milliseconds",
-                        method.as_str().to_lowercase()
+                        method_name
                     )));
                 }
                 other => {
                     return Err(RuntimeError::new(format!(
                         "http.{} timeout must be int milliseconds, got '{}'",
-                        method.as_str().to_lowercase(),
+                        method_name,
                         other.type_name()
                     )));
                 }
@@ -1389,11 +1680,11 @@ impl Runtime {
         if args.len() != cursor {
             return Err(RuntimeError::new(format!(
                 "http.{} received too many arguments",
-                method.as_str().to_lowercase()
+                method_name
             )));
         }
 
-        let lower_method = method.as_str().to_string();
+        let lower_method = method_name.to_string();
         let pending = PendingHttp::spawn(move || {
             let client = reqwest::blocking::Client::builder()
                 .timeout(Duration::from_millis(timeout_ms))
@@ -1437,6 +1728,22 @@ impl Runtime {
             })
         });
         Ok(Value::HttpPending(pending))
+    }
+
+    #[cfg(not(feature = "net"))]
+    fn native_http_request(
+        &self,
+        method_name: &str,
+        args: Vec<Value>,
+        _with_body: bool,
+    ) -> Result<Value, RuntimeError> {
+        let _ = args;
+        Err(RuntimeError::new(format!(
+            "http.{} is unavailable in this build (compiled without 'net' feature)",
+            method_name
+        ))
+        .with_code("RUNTIME0502")
+        .with_hint("rebuild with network support enabled"))
     }
 
     fn resolve_http_pending(
@@ -1492,6 +1799,70 @@ impl Runtime {
         expect_arity("crypto.sha256", &args, 1)?;
         let text = expect_string(&args[0], "crypto.sha256 input")?;
         Ok(Value::String(sha256_hex(text.as_bytes())))
+    }
+
+    fn native_concurrency_await(&self, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        expect_arity("concurrency.await", &args, 1)?;
+        self.await_value(args.into_iter().next().expect("arity checked"))
+    }
+
+    fn native_concurrency_join(&self, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        expect_arity("concurrency.join", &args, 1)?;
+        let Value::List(items) = &args[0] else {
+            return Err(RuntimeError::new(format!(
+                "concurrency.join expects list, got '{}'",
+                args[0].type_name()
+            )));
+        };
+
+        let mut resolved = Vec::new();
+        for item in items.borrow().iter() {
+            resolved.push(self.await_value(item.clone())?);
+        }
+        Ok(Value::list(resolved))
+    }
+
+    fn native_concurrency_timeout(&self, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        expect_arity("concurrency.timeout", &args, 2)?;
+        let Value::Int(ms) = args[0] else {
+            return Err(RuntimeError::new(format!(
+                "concurrency.timeout timeout expected int milliseconds, got '{}'",
+                args[0].type_name()
+            )));
+        };
+        if ms <= 0 {
+            return Err(RuntimeError::new(
+                "concurrency.timeout timeout must be > 0 milliseconds",
+            ));
+        }
+
+        match &args[1] {
+            Value::HttpPending(pending) => {
+                match pending.resolve_with_timeout(Some(Duration::from_millis(ms as u64))) {
+                    Ok(response) => Ok(Value::HttpResponse(response)),
+                    Err(message) => Ok(Value::Error(message)),
+                }
+            }
+            other => Ok(other.clone()),
+        }
+    }
+
+    fn native_concurrency_channel(&self, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        if !args.is_empty() {
+            return Err(RuntimeError::new(
+                "concurrency.channel expects no arguments",
+            ));
+        }
+        Ok(Value::Channel(Channel::new()))
+    }
+
+    fn await_value(&self, value: Value) -> Result<Value, RuntimeError> {
+        match value {
+            Value::HttpPending(pending) => {
+                Ok(Value::HttpResponse(self.resolve_http_pending(&pending)?))
+            }
+            other => Ok(other),
+        }
     }
 
     fn native_fs_read(&self, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1593,6 +1964,10 @@ impl Runtime {
             }),
             Value::Path(path) => Ok(Value::BoundMethod {
                 receiver: Box::new(Value::Path(path)),
+                method: property.to_string(),
+            }),
+            Value::Channel(channel) => Ok(Value::BoundMethod {
+                receiver: Box::new(Value::Channel(channel)),
                 method: property.to_string(),
             }),
             Value::Nil if optional => Ok(Value::Nil),
@@ -1773,6 +2148,16 @@ impl Runtime {
             .insert(name, value);
     }
 
+    fn assign_or_define(&mut self, name: String, value: Value) {
+        for scope in self.scopes.iter_mut().rev() {
+            if scope.contains_key(&name) {
+                scope.insert(name, value);
+                return;
+            }
+        }
+        self.define(name, value);
+    }
+
     fn assign(&mut self, name: &str, value: Value) -> Result<(), RuntimeError> {
         for scope in self.scopes.iter_mut().rev() {
             if scope.contains_key(name) {
@@ -1812,6 +2197,7 @@ impl Runtime {
     }
 }
 
+#[cfg(feature = "net")]
 #[derive(Debug, Clone)]
 struct ImportLockEntry {
     url: String,
@@ -1819,11 +2205,13 @@ struct ImportLockEntry {
     version: Option<String>,
 }
 
+#[cfg(feature = "net")]
 #[derive(Debug, Clone)]
 struct ResolvedImport {
     source: String,
 }
 
+#[cfg(feature = "net")]
 fn resolve_url_import(
     spec: &str,
     permissions: &Permissions,
@@ -1874,6 +2262,7 @@ fn resolve_url_import(
     Ok(ResolvedImport { source })
 }
 
+#[cfg(feature = "net")]
 fn parse_url_import_spec(spec: &str) -> Result<(String, Option<String>), RuntimeError> {
     let is_http = spec.starts_with("http://") || spec.starts_with("https://");
     if !is_http {
@@ -1891,25 +2280,41 @@ fn parse_url_import_spec(spec: &str) -> Result<(String, Option<String>), Runtime
     Ok((spec.to_string(), None))
 }
 
+#[cfg(feature = "net")]
 fn fetch_url_import_source(url: &str, permissions: &Permissions) -> Result<String, RuntimeError> {
-    permissions.check_net(url)?;
-    let response = reqwest::blocking::get(url)
-        .map_err(|err| RuntimeError::new(format!("failed to fetch import '{}': {}", url, err)))?;
-    if !response.status().is_success() {
-        return Err(RuntimeError::new(format!(
-            "failed to fetch import '{}': HTTP {}",
-            url,
-            response.status()
-        )));
+    #[cfg(not(feature = "net"))]
+    {
+        let _ = (url, permissions);
+        return Err(RuntimeError::new(
+            "URL imports are unavailable in this build (compiled without 'net' feature)",
+        )
+        .with_code("RUNTIME0501")
+        .with_hint("rebuild with network support enabled"));
     }
-    response.text().map_err(|err| {
-        RuntimeError::new(format!(
-            "failed to read response body for import '{}': {}",
-            url, err
-        ))
-    })
+
+    #[cfg(feature = "net")]
+    {
+        permissions.check_net(url)?;
+        let response = reqwest::blocking::get(url).map_err(|err| {
+            RuntimeError::new(format!("failed to fetch import '{}': {}", url, err))
+        })?;
+        if !response.status().is_success() {
+            return Err(RuntimeError::new(format!(
+                "failed to fetch import '{}': HTTP {}",
+                url,
+                response.status()
+            )));
+        }
+        response.text().map_err(|err| {
+            RuntimeError::new(format!(
+                "failed to read response body for import '{}': {}",
+                url, err
+            ))
+        })
+    }
 }
 
+#[cfg(feature = "net")]
 fn read_cached_import(modules_dir: &Path, sha256: &str) -> Result<Option<String>, RuntimeError> {
     let file_path = modules_dir.join(format!("{}.rask", sha256));
     if !file_path.exists() {
@@ -1934,6 +2339,7 @@ fn read_cached_import(modules_dir: &Path, sha256: &str) -> Result<Option<String>
     Ok(Some(source))
 }
 
+#[cfg(feature = "net")]
 fn write_cached_import(modules_dir: &Path, sha256: &str, source: &str) -> Result<(), RuntimeError> {
     let file_path = modules_dir.join(format!("{}.rask", sha256));
     fs::write(&file_path, source).map_err(|err| {
@@ -1945,6 +2351,7 @@ fn write_cached_import(modules_dir: &Path, sha256: &str, source: &str) -> Result
     })
 }
 
+#[cfg(feature = "net")]
 fn read_import_lockfile(path: &Path) -> Result<HashMap<String, ImportLockEntry>, RuntimeError> {
     if !path.exists() {
         return Ok(HashMap::new());
@@ -1992,6 +2399,7 @@ fn read_import_lockfile(path: &Path) -> Result<HashMap<String, ImportLockEntry>,
     Ok(entries)
 }
 
+#[cfg(feature = "net")]
 fn write_import_lockfile(
     path: &Path,
     entries: &HashMap<String, ImportLockEntry>,
@@ -2051,6 +2459,7 @@ fn write_import_lockfile(
     })
 }
 
+#[cfg(feature = "net")]
 fn import_lockfile_path() -> PathBuf {
     if let Ok(path) = std::env::var("RASK_LOCKFILE") {
         return PathBuf::from(path);
@@ -2060,6 +2469,7 @@ fn import_lockfile_path() -> PathBuf {
         .join(".rask.lock")
 }
 
+#[cfg(feature = "net")]
 fn import_cache_root() -> PathBuf {
     if let Ok(path) = std::env::var("RASK_CACHE_DIR") {
         return PathBuf::from(path);
@@ -2176,6 +2586,7 @@ fn value_to_path(value: &Value, label: &str) -> Result<PathBuf, RuntimeError> {
     }
 }
 
+#[cfg(feature = "net")]
 fn headers_from_value(value: &Value) -> Result<HashMap<String, String>, RuntimeError> {
     let Value::Map(entries) = value else {
         return Err(RuntimeError::new(format!(
@@ -2204,6 +2615,7 @@ fn headers_from_value(value: &Value) -> Result<HashMap<String, String>, RuntimeE
     Ok(headers)
 }
 
+#[cfg(feature = "net")]
 fn http_body_to_string(value: &Value) -> Result<String, RuntimeError> {
     if let Value::String(text) = value {
         return Ok(text.clone());
@@ -2218,15 +2630,77 @@ fn normalize_allowed_net_entry(entry: &str) -> String {
     if trimmed == "*" {
         return "*".to_string();
     }
-
-    if let Ok(parsed) = reqwest::Url::parse(trimmed) {
-        if let Some(host) = parsed.host_str() {
-            let host = host.to_ascii_lowercase();
-            if let Some(port) = parsed.port() {
-                return format!("{}:{}", host, port);
-            }
-            return host;
+    if let Some((host, port)) = extract_host_and_port(trimmed) {
+        if let Some(port) = port {
+            return format!("{}:{}", host, port);
         }
+        return host;
+    }
+    trimmed.to_ascii_lowercase()
+}
+
+fn prompt_permission(access_kind: &str, target: &str) -> bool {
+    let mut stderr = io::stderr();
+    let prompt = format!(
+        "permission prompt: allow {} access to '{}' once? [y/N]: ",
+        access_kind, target
+    );
+    if stderr.write_all(prompt.as_bytes()).is_err() {
+        return false;
+    }
+    if stderr.flush().is_err() {
+        return false;
+    }
+
+    let mut input = String::new();
+    if io::stdin().read_line(&mut input).is_err() {
+        return false;
+    }
+
+    matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+fn find_interpolation_end(template: &str, start: usize) -> Result<usize, RuntimeError> {
+    let mut depth: usize = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (offset, ch) in template[start..].char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                if depth == 0 {
+                    return Ok(start + offset);
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+
+    Err(RuntimeError::new(
+        "unterminated string interpolation expression (missing '}')",
+    ))
+}
+
+fn extract_host_and_port(input: &str) -> Option<(String, Option<u16>)> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
     }
 
     let without_scheme = if let Some((_, rest)) = trimmed.split_once("://") {
@@ -2234,12 +2708,37 @@ fn normalize_allowed_net_entry(entry: &str) -> String {
     } else {
         trimmed
     };
-    let host_port = without_scheme
-        .split('/')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    host_port
+
+    let authority = without_scheme.split('/').next().unwrap_or_default().trim();
+    if authority.is_empty() {
+        return None;
+    }
+
+    let authority = authority.rsplit('@').next().unwrap_or(authority).trim();
+    if authority.is_empty() {
+        return None;
+    }
+
+    if authority.starts_with('[') {
+        let close_idx = authority.find(']')?;
+        let host = authority[1..close_idx].to_ascii_lowercase();
+        let remainder = authority[close_idx + 1..].trim();
+        if let Some(port_str) = remainder.strip_prefix(':') {
+            let port = port_str.parse::<u16>().ok()?;
+            return Some((host, Some(port)));
+        }
+        return Some((host, None));
+    }
+
+    if let Some((host, port_str)) = authority.rsplit_once(':') {
+        if !host.is_empty() && !port_str.is_empty() {
+            if let Ok(port) = port_str.parse::<u16>() {
+                return Some((host.to_ascii_lowercase(), Some(port)));
+            }
+        }
+    }
+
+    Some((authority.to_ascii_lowercase(), None))
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
@@ -2262,6 +2761,25 @@ fn normalize_path(path: &Path) -> PathBuf {
         }
     }
     normalized
+}
+
+fn iterable_values(value: Value) -> Result<Vec<Value>, RuntimeError> {
+    match value {
+        Value::List(values) => Ok(values.borrow().iter().cloned().collect()),
+        Value::String(text) => Ok(UnicodeSegmentation::graphemes(text.as_str(), true)
+            .map(|g| Value::String(g.to_string()))
+            .collect()),
+        Value::Map(entries) => Ok(entries
+            .borrow()
+            .keys()
+            .cloned()
+            .map(Value::String)
+            .collect()),
+        other => Err(RuntimeError::new(format!(
+            "for-in requires list, map, or string iterable, got '{}'",
+            other.type_name()
+        ))),
+    }
 }
 
 fn to_f64(value: &Value) -> Option<f64> {
@@ -2490,7 +3008,8 @@ fn value_to_json(value: &Value) -> Result<serde_json::Value, RuntimeError> {
         | Value::NativeFunction(_)
         | Value::Module(_)
         | Value::BoundMethod { .. }
-        | Value::HttpPending(_) => Err(RuntimeError::new(format!(
+        | Value::HttpPending(_)
+        | Value::Channel(_) => Err(RuntimeError::new(format!(
             "json.stringify cannot encode '{}'",
             value.type_name()
         ))),

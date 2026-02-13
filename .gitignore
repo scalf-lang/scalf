@@ -16,3 +16,6 @@ Thumbs.db
 *.log
 *.tmp
 *.temp
+
+# Local release validation script
+/release_validation.rask

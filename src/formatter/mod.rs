@@ -28,6 +28,104 @@ fn format_statement(statement: &Stmt, indent: usize) -> String {
                 format!("{}use {}", pad, target_text)
             }
         }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            let mut out = format!("{}if {} {{", pad, format_expr(condition));
+            if then_branch.is_empty() {
+                out.push('}');
+            } else {
+                out.push('\n');
+                for statement in then_branch {
+                    out.push_str(&format_statement(statement, indent + 1));
+                    out.push('\n');
+                }
+                out.push_str(&format!("{}}}", pad));
+            }
+
+            if let Some(else_branch) = else_branch {
+                if else_branch.len() == 1 {
+                    if let Stmt::If { .. } = else_branch[0] {
+                        out.push_str(" else ");
+                        out.push_str(format_statement(&else_branch[0], indent).trim_start());
+                        return out;
+                    }
+                }
+
+                out.push_str(" else {");
+                if else_branch.is_empty() {
+                    out.push('}');
+                } else {
+                    out.push('\n');
+                    for statement in else_branch {
+                        out.push_str(&format_statement(statement, indent + 1));
+                        out.push('\n');
+                    }
+                    out.push_str(&format!("{}}}", pad));
+                }
+            }
+
+            out
+        }
+        Stmt::While { condition, body } => {
+            let mut out = format!("{}while {} {{", pad, format_expr(condition));
+            if body.is_empty() {
+                out.push('}');
+                return out;
+            }
+            out.push('\n');
+            for statement in body {
+                out.push_str(&format_statement(statement, indent + 1));
+                out.push('\n');
+            }
+            out.push_str(&format!("{}}}", pad));
+            out
+        }
+        Stmt::For {
+            initializer,
+            condition,
+            increment,
+            body,
+        } => {
+            let init = initializer
+                .as_ref()
+                .map(|stmt| format_for_initializer(stmt))
+                .unwrap_or_default();
+            let cond = condition.as_ref().map(format_expr).unwrap_or_default();
+            let inc = increment.as_ref().map(format_expr).unwrap_or_default();
+            let mut out = format!("{}for {}; {}; {} {{", pad, init, cond, inc);
+            if body.is_empty() {
+                out.push('}');
+                return out;
+            }
+            out.push('\n');
+            for statement in body {
+                out.push_str(&format_statement(statement, indent + 1));
+                out.push('\n');
+            }
+            out.push_str(&format!("{}}}", pad));
+            out
+        }
+        Stmt::ForIn {
+            item_name,
+            iterable,
+            body,
+        } => {
+            let mut out = format!("{}for {} in {} {{", pad, item_name, format_expr(iterable));
+            if body.is_empty() {
+                out.push('}');
+                return out;
+            }
+            out.push('\n');
+            for statement in body {
+                out.push_str(&format_statement(statement, indent + 1));
+                out.push('\n');
+            }
+            out.push_str(&format!("{}}}", pad));
+            out
+        }
         Stmt::Test { name, body } => {
             let mut out = format!("{}test \"{}\" {{", pad, escape_string(name));
             if body.is_empty() {
@@ -128,6 +226,24 @@ fn format_statement(statement: &Stmt, indent: usize) -> String {
         }
         Stmt::Print { expr } => format!("{}print({})", pad, format_expr(expr)),
         Stmt::Expr(expr) => format!("{}{}", pad, format_expr(expr)),
+    }
+}
+
+fn format_for_initializer(statement: &Stmt) -> String {
+    match statement {
+        Stmt::VarDecl {
+            name,
+            type_annotation,
+            initializer,
+        } => {
+            if let Some(annotation) = type_annotation {
+                format!("{}: {} = {}", name, annotation, format_expr(initializer))
+            } else {
+                format!("{} = {}", name, format_expr(initializer))
+            }
+        }
+        Stmt::Expr(expr) => format_expr(expr),
+        _ => format_statement(statement, 0),
     }
 }
 

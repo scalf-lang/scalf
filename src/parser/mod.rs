@@ -63,6 +63,18 @@ impl Parser {
             return self.use_statement();
         }
 
+        if self.matches_keyword(TokenKind::If) {
+            return self.if_statement();
+        }
+
+        if self.matches_keyword(TokenKind::While) {
+            return self.while_statement();
+        }
+
+        if self.matches_keyword(TokenKind::For) {
+            return self.for_statement();
+        }
+
         if self.matches_keyword(TokenKind::Def) {
             return self.function_definition();
         }
@@ -93,6 +105,107 @@ impl Parser {
 
         let expr = self.expression()?;
         Ok(Stmt::Expr(expr))
+    }
+
+    fn if_statement(&mut self) -> Result<Stmt, ParseError> {
+        let condition = self.expression()?;
+        self.consume_symbol(TokenKind::LeftBrace, "expected '{' before if body")?;
+        let then_branch = self.parse_block_statements()?;
+
+        let else_branch = if self.matches_keyword(TokenKind::Else) {
+            if self.matches_keyword(TokenKind::If) {
+                Some(vec![self.if_statement()?])
+            } else {
+                self.consume_symbol(TokenKind::LeftBrace, "expected '{' before else body")?;
+                Some(self.parse_block_statements()?)
+            }
+        } else {
+            None
+        };
+
+        Ok(Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        })
+    }
+
+    fn while_statement(&mut self) -> Result<Stmt, ParseError> {
+        let condition = self.expression()?;
+        self.consume_symbol(TokenKind::LeftBrace, "expected '{' before while body")?;
+        let body = self.parse_block_statements()?;
+        Ok(Stmt::While { condition, body })
+    }
+
+    fn for_statement(&mut self) -> Result<Stmt, ParseError> {
+        if matches!(self.peek_kind(), TokenKind::Identifier(_))
+            && matches!(self.peek_kind_at(1), Some(TokenKind::Identifier(name)) if name == "in")
+        {
+            return self.for_in_statement();
+        }
+        self.for_c_style_statement()
+    }
+
+    fn for_in_statement(&mut self) -> Result<Stmt, ParseError> {
+        let item_name = self.consume_identifier("expected item name after 'for'")?;
+        if !self.matches_identifier_literal("in") {
+            return Err(ParseError::new(
+                "expected 'in' in for-in statement",
+                self.peek(),
+            ));
+        }
+        let iterable = self.expression()?;
+        self.consume_symbol(TokenKind::LeftBrace, "expected '{' before for-in body")?;
+        let body = self.parse_block_statements()?;
+        Ok(Stmt::ForIn {
+            item_name,
+            iterable,
+            body,
+        })
+    }
+
+    fn for_c_style_statement(&mut self) -> Result<Stmt, ParseError> {
+        let initializer = if self.matches_symbol(TokenKind::Semicolon) {
+            None
+        } else {
+            let stmt = if self.looks_like_var_decl() {
+                self.variable_declaration()?
+            } else {
+                Stmt::Expr(self.expression()?)
+            };
+            self.consume_symbol(
+                TokenKind::Semicolon,
+                "expected ';' after for-loop initializer",
+            )?;
+            Some(Box::new(stmt))
+        };
+
+        let condition = if self.matches_symbol(TokenKind::Semicolon) {
+            None
+        } else {
+            let expr = self.expression()?;
+            self.consume_symbol(
+                TokenKind::Semicolon,
+                "expected ';' after for-loop condition",
+            )?;
+            Some(expr)
+        };
+
+        let increment = if self.check_kind(&TokenKind::LeftBrace) {
+            None
+        } else {
+            Some(self.expression()?)
+        };
+
+        self.consume_symbol(TokenKind::LeftBrace, "expected '{' before for-loop body")?;
+        let body = self.parse_block_statements()?;
+
+        Ok(Stmt::For {
+            initializer,
+            condition,
+            increment,
+            body,
+        })
     }
 
     fn use_statement(&mut self) -> Result<Stmt, ParseError> {
