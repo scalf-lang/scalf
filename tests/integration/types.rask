@@ -1,0 +1,3 @@
+age: int = 25
+pi: float = 3.14
+

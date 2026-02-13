@@ -1,0 +1,4 @@
+#!/usr/bin/env rask
+name = "Rask"
+print("Hello, {name}!")
+
