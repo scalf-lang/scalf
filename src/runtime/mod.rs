@@ -172,14 +172,14 @@ impl RuntimeError {
             message: message.into(),
             code: "RUNTIME0001",
             hint: None,
-            docs_url: Some("https://scalf-lang.dev/errors/RUNTIME0001".to_string()),
+            docs_url: Some("https://scalf-lang.github.io/errors/RUNTIME0001".to_string()),
             stack_frames: Vec::new(),
         }
     }
 
     fn with_code(mut self, code: &'static str) -> Self {
         self.code = code;
-        self.docs_url = Some(format!("https://scalf-lang.dev/errors/{}", code));
+        self.docs_url = Some(format!("https://scalf-lang.github.io/errors/{}", code));
         self
     }
 

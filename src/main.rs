@@ -596,7 +596,7 @@ fn parse_and_typecheck(
 ) -> Result<scalf::parser::ast::Program, String> {
     let tokens = scalf::lexer::lex(source).map_err(|err| {
         format!(
-            "lex error [LEX0001]: {}\n--> {}:{}:{}\ndocs: https://scalf-lang.dev/errors/LEX0001",
+            "lex error [LEX0001]: {}\n--> {}:{}:{}\ndocs: https://scalf-lang.github.io/errors/LEX0001",
             err.message, source_label, err.line, err.column
         )
     })?;

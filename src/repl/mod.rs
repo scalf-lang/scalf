@@ -235,7 +235,7 @@ pub fn run_with_permissions(
                     }
                 }
                 Err(err) => eprintln!(
-                    "lex error [LEX0001]: {}\n--> <repl>:{}:{}\ndocs: https://scalf-lang.dev/errors/LEX0001",
+                    "lex error [LEX0001]: {}\n--> <repl>:{}:{}\ndocs: https://scalf-lang.github.io/errors/LEX0001",
                     err.message, err.line, err.column
                 ),
             }
@@ -332,7 +332,7 @@ pub fn run_with_permissions(
                     }
                 }
                 Err(err) => eprintln!(
-                    "lex error [LEX0001]: {}\n--> <repl>:{}:{}\ndocs: https://scalf-lang.dev/errors/LEX0001",
+                    "lex error [LEX0001]: {}\n--> <repl>:{}:{}\ndocs: https://scalf-lang.github.io/errors/LEX0001",
                     err.message, err.line, err.column
                 ),
             }
