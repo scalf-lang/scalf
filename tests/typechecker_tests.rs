@@ -1,12 +1,20 @@
-use rask::typechecker::types::{is_assignable, Type};
+use scalf::typechecker::types::{is_assignable, Type};
 
 fn check(
     source: &str,
-) -> Result<rask::typechecker::TypeCheckOutput, Vec<rask::typechecker::TypeError>> {
-    let tokens = rask::lexer::lex(source).expect("lex should succeed");
-    let mut parser = rask::parser::Parser::new(tokens);
+) -> Result<scalf::typechecker::TypeCheckOutput, Vec<scalf::typechecker::TypeError>> {
+    check_with_implicit_nil(source, false)
+}
+
+fn check_with_implicit_nil(
+    source: &str,
+    enabled: bool,
+) -> Result<scalf::typechecker::TypeCheckOutput, Vec<scalf::typechecker::TypeError>> {
+    let tokens = scalf::lexer::lex(source).expect("lex should succeed");
+    let mut parser = scalf::parser::Parser::new(tokens);
     let program = parser.parse_program().expect("parse should succeed");
-    let mut checker = rask::typechecker::TypeChecker::new();
+    let mut checker =
+        scalf::typechecker::TypeChecker::new().with_implicit_nil_for_unknown_variables(enabled);
     checker.check_program(&program)
 }
 
@@ -57,6 +65,15 @@ fn detects_unknown_variable() {
             .any(|err| err.message.contains("unknown variable 'missing'")),
         "expected unknown variable error, got: {:?}",
         errors
+    );
+}
+
+#[test]
+fn allows_unknown_variable_when_implicit_nil_enabled() {
+    let output = check_with_implicit_nil("print(missing or 5)\nprint(missing?.name)", true);
+    assert!(
+        output.is_ok(),
+        "expected implicit nil mode to allow unknowns"
     );
 }
 

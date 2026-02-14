@@ -6,8 +6,9 @@ use std::time::Instant;
 
 struct RunCli {
     script_path: Option<String>,
-    permissions: rask::runtime::Permissions,
+    permissions: scalf::runtime::Permissions,
     use_vm: bool,
+    implicit_nil_for_unknown_variables: bool,
 }
 
 fn main() {
@@ -26,9 +27,13 @@ fn main() {
             if let Some(path) = run_cli.script_path {
                 match fs::read_to_string(&path) {
                     Ok(source) => {
-                        if let Err(err) =
-                            run_source_file(&path, &source, run_cli.permissions, run_cli.use_vm)
-                        {
+                        if let Err(err) = run_source_file(
+                            &path,
+                            &source,
+                            run_cli.permissions,
+                            run_cli.use_vm,
+                            run_cli.implicit_nil_for_unknown_variables,
+                        ) {
                             eprintln!("{}", err);
                             std::process::exit(1);
                         }
@@ -39,16 +44,23 @@ fn main() {
                     }
                 }
             } else if let Some((source_label, source)) = embedded_script() {
-                if let Err(err) =
-                    run_source_file(source_label, source, run_cli.permissions, run_cli.use_vm)
-                {
+                if let Err(err) = run_source_file(
+                    source_label,
+                    source,
+                    run_cli.permissions,
+                    run_cli.use_vm,
+                    run_cli.implicit_nil_for_unknown_variables,
+                ) {
                     eprintln!("{}", err);
                     std::process::exit(1);
                 }
             } else if run_cli.use_vm {
                 eprintln!("--vm requires a script path");
                 std::process::exit(1);
-            } else if let Err(err) = rask::repl::run_with_permissions(run_cli.permissions) {
+            } else if let Err(err) = scalf::repl::run_with_permissions(
+                run_cli.permissions,
+                run_cli.implicit_nil_for_unknown_variables,
+            ) {
                 eprintln!("repl error: {}", err);
                 std::process::exit(1);
             }
@@ -112,12 +124,12 @@ fn run_startup_command(args: &[String]) -> Result<(), String> {
             script_path = Some(arg.clone());
             continue;
         }
-        return Err("startup usage: rask startup <file> [--iterations=<n>] [--budget-ms=<ms>|--no-budget] [--vm]".to_string());
+        return Err("startup usage: scalf startup <file> [--iterations=<n>] [--budget-ms=<ms>|--no-budget] [--vm]".to_string());
     }
 
     let Some(script_path) = script_path else {
         return Err(
-            "startup usage: rask startup <file> [--iterations=<n>] [--budget-ms=<ms>|--no-budget] [--vm]"
+            "startup usage: scalf startup <file> [--iterations=<n>] [--budget-ms=<ms>|--no-budget] [--vm]"
                 .to_string(),
         );
     };
@@ -131,9 +143,9 @@ fn run_startup_command(args: &[String]) -> Result<(), String> {
     let mut samples_ms = Vec::with_capacity(iterations);
     for _ in 0..iterations {
         let started = Instant::now();
-        let program = parse_and_typecheck(&source, &script_path)?;
+        let program = parse_and_typecheck(&source, &script_path, false)?;
         if use_vm {
-            let _ = rask::vm::compile_program(&program).map_err(|err| err.to_string())?;
+            let _ = scalf::vm::compile_program(&program).map_err(|err| err.to_string())?;
         }
         let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
         samples_ms.push(elapsed_ms);
@@ -231,21 +243,21 @@ fn run_build_command(args: &[String]) -> Result<(), String> {
             continue;
         }
         return Err(
-            "build usage: rask build <file> [--target=<alias|triple>] [--out=<path>] [--debug]"
+            "build usage: scalf build <file> [--target=<alias|triple>] [--out=<path>] [--debug]"
                 .to_string(),
         );
     }
 
     let Some(script_path) = script_path else {
         return Err(
-            "build usage: rask build <file> [--target=<alias|triple>] [--out=<path>] [--debug]"
+            "build usage: scalf build <file> [--target=<alias|triple>] [--out=<path>] [--debug]"
                 .to_string(),
         );
     };
 
     let source = fs::read_to_string(&script_path)
         .map_err(|err| format!("failed to read '{}': {}", script_path, err))?;
-    let program = parse_and_typecheck(&source, &script_path)?;
+    let program = parse_and_typecheck(&source, &script_path, false)?;
     let required_features = script_required_cargo_features(&program);
 
     let resolved_target = target.as_deref().map(resolve_target_alias).transpose()?;
@@ -269,13 +281,13 @@ fn run_build_command(args: &[String]) -> Result<(), String> {
     command
         .arg("build")
         .arg("--bin")
-        .arg("rask")
+        .arg("scalf")
         .arg("--manifest-path")
         .arg(&manifest_path)
         .current_dir(&caller_cwd)
         .env("CARGO_TARGET_DIR", &build_target_dir)
-        .env("RASK_EMBEDDED_SCRIPT", &source)
-        .env("RASK_EMBEDDED_SOURCE_LABEL", &script_path);
+        .env("scalf_EMBEDDED_SCRIPT", &source)
+        .env("scalf_EMBEDDED_SOURCE_LABEL", &script_path);
     command.arg("--no-default-features");
     if !required_features.is_empty() {
         command.arg("--features").arg(required_features.join(","));
@@ -359,7 +371,7 @@ fn run_docs_command(args: &[String]) -> Result<(), String> {
         ));
     }
 
-    rask::docgen::generate_stdlib_reference(&output)
+    scalf::docgen::generate_stdlib_reference(&output)
         .map(|report| {
             println!(
                 "generated stdlib docs: {} ({} module files)",
@@ -386,13 +398,13 @@ fn run_fmt_command(args: &[String]) -> Result<(), String> {
     }
 
     let Some(file) = file else {
-        return Err("fmt usage: rask fmt [--check] <file>".to_string());
+        return Err("fmt usage: scalf fmt [--check] <file>".to_string());
     };
 
     let source =
         fs::read_to_string(&file).map_err(|err| format!("failed to read '{}': {}", file, err))?;
-    let program = parse_and_typecheck(&source, &file)?;
-    let formatted = rask::formatter::format_program(&program);
+    let program = parse_and_typecheck(&source, &file, false)?;
+    let formatted = scalf::formatter::format_program(&program);
 
     if check_only {
         if source == formatted {
@@ -400,7 +412,7 @@ fn run_fmt_command(args: &[String]) -> Result<(), String> {
             Ok(())
         } else {
             Err(format!(
-                "formatting differs for '{}'; run `rask fmt {}`",
+                "formatting differs for '{}'; run `scalf fmt {}`",
                 file, file
             ))
         }
@@ -414,20 +426,20 @@ fn run_fmt_command(args: &[String]) -> Result<(), String> {
 
 fn run_check_command(args: &[String]) -> Result<(), String> {
     let Some(file) = args.get(1) else {
-        return Err("check usage: rask check <file>".to_string());
+        return Err("check usage: scalf check <file>".to_string());
     };
     let source =
         fs::read_to_string(file).map_err(|err| format!("failed to read '{}': {}", file, err))?;
-    let program = parse_and_typecheck(&source, file)?;
+    let program = parse_and_typecheck(&source, file, false)?;
 
-    let warnings = rask::lint::lint_program(&program);
+    let warnings = scalf::lint::lint_program(&program);
     if warnings.is_empty() {
         println!("check passed: {}", file);
     } else {
         for warning in &warnings {
             println!(
                 "{}",
-                rask::errors::pretty::format_lint_warning(warning, file)
+                scalf::errors::pretty::format_lint_warning(warning, file)
             );
         }
         println!("check passed with {} warning(s): {}", warnings.len(), file);
@@ -438,7 +450,7 @@ fn run_check_command(args: &[String]) -> Result<(), String> {
 fn run_test_command(args: &[String]) -> Result<(), String> {
     let run_cli = parse_cli(args.iter().skip(1).cloned().collect())?;
     let Some(path) = run_cli.script_path else {
-        return Err("test usage: rask test <file> [permissions]".to_string());
+        return Err("test usage: scalf test <file> [permissions]".to_string());
     };
     if run_cli.use_vm {
         return Err("test command does not support --vm yet".to_string());
@@ -446,9 +458,10 @@ fn run_test_command(args: &[String]) -> Result<(), String> {
 
     let source =
         fs::read_to_string(&path).map_err(|err| format!("failed to read '{}': {}", path, err))?;
-    let program = parse_and_typecheck(&source, &path)?;
+    let program = parse_and_typecheck(&source, &path, run_cli.implicit_nil_for_unknown_variables)?;
 
-    let mut runtime = rask::runtime::Runtime::with_permissions(run_cli.permissions)
+    let mut runtime = scalf::runtime::Runtime::with_permissions(run_cli.permissions)
+        .with_implicit_nil_for_unknown_variables(run_cli.implicit_nil_for_unknown_variables)
         .with_source_label(path.clone());
     let report = runtime.run_tests(&program);
 
@@ -475,12 +488,18 @@ fn run_test_command(args: &[String]) -> Result<(), String> {
 
 fn parse_cli(args: Vec<String>) -> Result<RunCli, String> {
     let mut script_path: Option<String> = None;
-    let mut permissions = rask::runtime::Permissions::default();
+    let mut permissions = scalf::runtime::Permissions::default();
     let mut use_vm = false;
+    let mut implicit_nil_for_unknown_variables = false;
 
     for arg in args {
         if arg == "--vm" {
             use_vm = true;
+            continue;
+        }
+
+        if arg == "--implicit-nil" {
+            implicit_nil_for_unknown_variables = true;
             continue;
         }
 
@@ -514,7 +533,7 @@ fn parse_cli(args: Vec<String>) -> Result<RunCli, String> {
         }
 
         if arg == "--allow-all" {
-            permissions = rask::runtime::Permissions::allow_all();
+            permissions = scalf::runtime::Permissions::allow_all();
             continue;
         }
 
@@ -533,6 +552,7 @@ fn parse_cli(args: Vec<String>) -> Result<RunCli, String> {
         script_path,
         permissions,
         use_vm,
+        implicit_nil_for_unknown_variables,
     })
 }
 
@@ -572,22 +592,24 @@ fn normalize_pathbuf(path: PathBuf) -> PathBuf {
 fn parse_and_typecheck(
     source: &str,
     source_label: &str,
-) -> Result<rask::parser::ast::Program, String> {
-    let tokens = rask::lexer::lex(source).map_err(|err| {
+    implicit_nil_for_unknown_variables: bool,
+) -> Result<scalf::parser::ast::Program, String> {
+    let tokens = scalf::lexer::lex(source).map_err(|err| {
         format!(
-            "lex error [LEX0001]: {}\n--> {}:{}:{}\ndocs: https://rask-lang.dev/errors/LEX0001",
+            "lex error [LEX0001]: {}\n--> {}:{}:{}\ndocs: https://scalf-lang.dev/errors/LEX0001",
             err.message, source_label, err.line, err.column
         )
     })?;
 
-    let mut parser = rask::parser::Parser::new(tokens);
+    let mut parser = scalf::parser::Parser::new(tokens);
     let program = parser
         .parse_program()
-        .map_err(|err| rask::errors::pretty::format_parse_error(source_label, source, &err))?;
+        .map_err(|err| scalf::errors::pretty::format_parse_error(source_label, source, &err))?;
 
-    let mut checker = rask::typechecker::TypeChecker::new();
+    let mut checker = scalf::typechecker::TypeChecker::new()
+        .with_implicit_nil_for_unknown_variables(implicit_nil_for_unknown_variables);
     checker.check_program(&program).map_err(|errors| {
-        rask::errors::pretty::format_type_errors(source_label, &errors).join("\n\n")
+        scalf::errors::pretty::format_type_errors(source_label, &errors).join("\n\n")
     })?;
 
     Ok(program)
@@ -596,15 +618,17 @@ fn parse_and_typecheck(
 fn run_source_file(
     path: &str,
     source: &str,
-    permissions: rask::runtime::Permissions,
+    permissions: scalf::runtime::Permissions,
     use_vm: bool,
+    implicit_nil_for_unknown_variables: bool,
 ) -> Result<(), String> {
-    let program = parse_and_typecheck(source, path)?;
+    let program = parse_and_typecheck(source, path, implicit_nil_for_unknown_variables)?;
     if use_vm {
-        let _ = rask::vm::run_program(&program).map_err(|err| err.to_string())?;
+        let _ = scalf::vm::run_program(&program).map_err(|err| err.to_string())?;
     } else {
-        let mut runtime =
-            rask::runtime::Runtime::with_permissions(permissions).with_source_label(path);
+        let mut runtime = scalf::runtime::Runtime::with_permissions(permissions)
+            .with_implicit_nil_for_unknown_variables(implicit_nil_for_unknown_variables)
+            .with_source_label(path);
         let _ = runtime
             .run_program(&program)
             .map_err(|err| err.to_string())?;
@@ -613,8 +637,8 @@ fn run_source_file(
 }
 
 fn embedded_script() -> Option<(&'static str, &'static str)> {
-    let source = option_env!("RASK_EMBEDDED_SCRIPT")?;
-    let label = option_env!("RASK_EMBEDDED_SOURCE_LABEL").unwrap_or("<embedded>");
+    let source = option_env!("scalf_EMBEDDED_SCRIPT")?;
+    let label = option_env!("scalf_EMBEDDED_SOURCE_LABEL").unwrap_or("<embedded>");
     Some((label, source))
 }
 
@@ -652,7 +676,7 @@ fn locate_built_binary(
         path.push(target);
     }
     path.push(if release { "release" } else { "debug" });
-    let binary_name = if is_windows { "rask.exe" } else { "rask" };
+    let binary_name = if is_windows { "scalf.exe" } else { "scalf" };
     path.push(binary_name);
     path
 }
@@ -671,10 +695,10 @@ fn default_build_output_path(script_path: &str, is_windows: bool) -> PathBuf {
 }
 
 fn default_temp_embedded_build_dir() -> PathBuf {
-    env::temp_dir().join("rask-embedded-build-cache")
+    env::temp_dir().join("scalf-embedded-build-cache")
 }
 
-fn script_required_cargo_features(program: &rask::parser::ast::Program) -> Vec<String> {
+fn script_required_cargo_features(program: &scalf::parser::ast::Program) -> Vec<String> {
     let mut features = Vec::new();
     if program_requires_net(program) {
         features.push("net".to_string());
@@ -682,12 +706,12 @@ fn script_required_cargo_features(program: &rask::parser::ast::Program) -> Vec<S
     features
 }
 
-fn program_requires_net(program: &rask::parser::ast::Program) -> bool {
+fn program_requires_net(program: &scalf::parser::ast::Program) -> bool {
     program.statements.iter().any(stmt_requires_net)
 }
 
-fn stmt_requires_net(stmt: &rask::parser::ast::Stmt) -> bool {
-    use rask::parser::ast::{Stmt, UseTarget};
+fn stmt_requires_net(stmt: &scalf::parser::ast::Stmt) -> bool {
+    use scalf::parser::ast::{Stmt, UseTarget};
 
     match stmt {
         Stmt::Use { target, .. } => match target {
@@ -736,8 +760,8 @@ fn stmt_requires_net(stmt: &rask::parser::ast::Stmt) -> bool {
     }
 }
 
-fn expr_requires_net(expr: &rask::parser::ast::Expr) -> bool {
-    use rask::parser::ast::Expr;
+fn expr_requires_net(expr: &scalf::parser::ast::Expr) -> bool {
+    use scalf::parser::ast::Expr;
 
     match expr {
         Expr::Variable(name) => name == "http",
@@ -787,9 +811,9 @@ fn expr_requires_net(expr: &rask::parser::ast::Expr) -> bool {
 mod tests {
     use super::*;
 
-    fn parse_program(source: &str) -> rask::parser::ast::Program {
-        let tokens = rask::lexer::lex(source).expect("lex should succeed");
-        let mut parser = rask::parser::Parser::new(tokens);
+    fn parse_program(source: &str) -> scalf::parser::ast::Program {
+        let tokens = scalf::lexer::lex(source).expect("lex should succeed");
+        let mut parser = scalf::parser::Parser::new(tokens);
         parser.parse_program().expect("parse should succeed")
     }
 
@@ -806,7 +830,7 @@ mod tests {
         let features = script_required_cargo_features(&program);
         assert_eq!(features, vec!["net".to_string()]);
 
-        let program = parse_program("use \"https://example.com/mod.rask\" as remote");
+        let program = parse_program("use \"https://example.com/mod.scalf\" as remote");
         let features = script_required_cargo_features(&program);
         assert_eq!(features, vec!["net".to_string()]);
     }

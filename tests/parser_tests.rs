@@ -1,8 +1,8 @@
-use rask::parser::ast::{BinaryOp, Expr, Pattern, Stmt, UseTarget};
+use scalf::parser::ast::{BinaryOp, Expr, Pattern, Stmt, UseTarget};
 
 fn parse(source: &str) -> Vec<Stmt> {
-    let tokens = rask::lexer::lex(source).expect("lex should succeed");
-    let mut parser = rask::parser::Parser::new(tokens);
+    let tokens = scalf::lexer::lex(source).expect("lex should succeed");
+    let mut parser = scalf::parser::Parser::new(tokens);
     let program = parser.parse_program().expect("parse should succeed");
     program.statements
 }
@@ -162,12 +162,12 @@ fn parses_use_statement_with_alias() {
 
 #[test]
 fn parses_url_use_statement_with_alias() {
-    let statements = parse("use \"https://example.com/lib.rask@v1\" as lib");
+    let statements = parse("use \"https://example.com/lib.scalf@v1\" as lib");
     match &statements[0] {
         Stmt::Use { target, alias } => {
             assert_eq!(
                 target,
-                &UseTarget::Url("https://example.com/lib.rask@v1".to_string())
+                &UseTarget::Url("https://example.com/lib.scalf@v1".to_string())
             );
             assert_eq!(alias.as_deref(), Some("lib"));
         }
@@ -177,7 +177,7 @@ fn parses_url_use_statement_with_alias() {
 
 #[test]
 fn parses_list_map_literals_and_index() {
-    let statements = parse("value = {name: \"rask\", nums: [1, 2, 3]}[\"name\"]");
+    let statements = parse("value = {name: \"scalf\", nums: [1, 2, 3]}[\"name\"]");
     match &statements[0] {
         Stmt::VarDecl { initializer, .. } => match initializer {
             Expr::Index { object, .. } => {

@@ -112,16 +112,19 @@ impl Completer for ReplEditorHelper {
 }
 
 pub fn run() -> Result<(), Box<dyn Error>> {
-    run_with_permissions(crate::runtime::Permissions::default())
+    run_with_permissions(crate::runtime::Permissions::default(), false)
 }
 
 pub fn run_with_permissions(
     permissions: crate::runtime::Permissions,
+    implicit_nil_for_unknown_variables: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut multiline_buffer = String::new();
-    let mut checker = crate::typechecker::TypeChecker::new();
-    let mut runtime =
-        crate::runtime::Runtime::with_permissions(permissions).with_source_label("<repl>");
+    let mut checker = crate::typechecker::TypeChecker::new()
+        .with_implicit_nil_for_unknown_variables(implicit_nil_for_unknown_variables);
+    let mut runtime = crate::runtime::Runtime::with_permissions(permissions)
+        .with_implicit_nil_for_unknown_variables(implicit_nil_for_unknown_variables)
+        .with_source_label("<repl>");
     let mut history = load_history();
     let docs = repl_docs();
     let mut show_timing = true;

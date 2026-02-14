@@ -43,6 +43,7 @@ struct FunctionContext {
 pub struct TypeChecker {
     scopes: Vec<HashMap<String, Type>>,
     function_stack: Vec<FunctionContext>,
+    implicit_nil_for_unknown_variables: bool,
 }
 
 impl TypeChecker {
@@ -112,7 +113,13 @@ impl TypeChecker {
         Self {
             scopes: vec![global],
             function_stack: Vec::new(),
+            implicit_nil_for_unknown_variables: false,
         }
+    }
+
+    pub fn with_implicit_nil_for_unknown_variables(mut self, enabled: bool) -> Self {
+        self.implicit_nil_for_unknown_variables = enabled;
+        self
     }
 
     pub fn inferred_types(&self) -> &HashMap<String, Type> {
@@ -410,8 +417,12 @@ impl TypeChecker {
             Expr::Bool(_) => Type::Bool,
             Expr::Nil => Type::Nil,
             Expr::Variable(name) => self.lookup(name).unwrap_or_else(|| {
-                errors.push(TypeError::new(format!("unknown variable '{}'", name)));
-                Type::Unknown
+                if self.implicit_nil_for_unknown_variables {
+                    Type::Nil
+                } else {
+                    errors.push(TypeError::new(format!("unknown variable '{}'", name)));
+                    Type::Unknown
+                }
             }),
             Expr::Unary { op, rhs } => {
                 let rhs_type = self.infer_expr(rhs, errors);

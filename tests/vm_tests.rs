@@ -1,9 +1,9 @@
-use rask::runtime::value::Value;
-use rask::vm::{compile_program, run_program, Instruction};
+use scalf::runtime::value::Value;
+use scalf::vm::{compile_program, run_program, Instruction};
 
-fn parse_program(source: &str) -> rask::parser::ast::Program {
-    let tokens = rask::lexer::lex(source).expect("lex should succeed");
-    let mut parser = rask::parser::Parser::new(tokens);
+fn parse_program(source: &str) -> scalf::parser::ast::Program {
+    let tokens = scalf::lexer::lex(source).expect("lex should succeed");
+    let mut parser = scalf::parser::Parser::new(tokens);
     parser.parse_program().expect("parse should succeed")
 }
 

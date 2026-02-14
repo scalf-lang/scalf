@@ -5,17 +5,17 @@ use std::sync::{mpsc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rask::runtime::value::Value;
+use scalf::runtime::value::Value;
 
 fn run(source: &str) -> Value {
-    run_with_permissions(source, rask::runtime::Permissions::allow_all())
+    run_with_permissions(source, scalf::runtime::Permissions::allow_all())
 }
 
-fn run_with_permissions(source: &str, permissions: rask::runtime::Permissions) -> Value {
-    let tokens = rask::lexer::lex(source).expect("lex should succeed");
-    let mut parser = rask::parser::Parser::new(tokens);
+fn run_with_permissions(source: &str, permissions: scalf::runtime::Permissions) -> Value {
+    let tokens = scalf::lexer::lex(source).expect("lex should succeed");
+    let mut parser = scalf::parser::Parser::new(tokens);
     let program = parser.parse_program().expect("parse should succeed");
-    let mut runtime = rask::runtime::Runtime::with_permissions(permissions);
+    let mut runtime = scalf::runtime::Runtime::with_permissions(permissions);
     runtime
         .run_program(&program)
         .expect("runtime should succeed")
@@ -23,13 +23,25 @@ fn run_with_permissions(source: &str, permissions: rask::runtime::Permissions) -
 
 fn run_result(
     source: &str,
-    permissions: rask::runtime::Permissions,
-) -> Result<Value, rask::runtime::RuntimeError> {
-    let tokens = rask::lexer::lex(source).expect("lex should succeed");
-    let mut parser = rask::parser::Parser::new(tokens);
+    permissions: scalf::runtime::Permissions,
+) -> Result<Value, scalf::runtime::RuntimeError> {
+    let tokens = scalf::lexer::lex(source).expect("lex should succeed");
+    let mut parser = scalf::parser::Parser::new(tokens);
     let program = parser.parse_program().expect("parse should succeed");
-    let mut runtime = rask::runtime::Runtime::with_permissions(permissions);
+    let mut runtime = scalf::runtime::Runtime::with_permissions(permissions);
     runtime.run_program(&program)
+}
+
+fn run_with_implicit_nil(source: &str) -> Value {
+    let tokens = scalf::lexer::lex(source).expect("lex should succeed");
+    let mut parser = scalf::parser::Parser::new(tokens);
+    let program = parser.parse_program().expect("parse should succeed");
+    let mut runtime =
+        scalf::runtime::Runtime::with_permissions(scalf::runtime::Permissions::allow_all())
+            .with_implicit_nil_for_unknown_variables(true);
+    runtime
+        .run_program(&program)
+        .expect("runtime should succeed")
 }
 
 fn spawn_http_server(
@@ -96,13 +108,13 @@ impl ImportTestEnv {
             .duration_since(UNIX_EPOCH)
             .expect("clock should be valid")
             .as_nanos();
-        root.push(format!("rask_phase5_test_{}", stamp));
+        root.push(format!("scalf_phase5_test_{}", stamp));
         let cache_dir = root.join("cache");
-        let lockfile = root.join(".rask.lock");
+        let lockfile = root.join(".scalf.lock");
 
         std::fs::create_dir_all(&cache_dir).expect("cache dir should be created");
-        std::env::set_var("RASK_CACHE_DIR", &cache_dir);
-        std::env::set_var("RASK_LOCKFILE", &lockfile);
+        std::env::set_var("scalf_CACHE_DIR", &cache_dir);
+        std::env::set_var("scalf_LOCKFILE", &lockfile);
 
         Self {
             _guard: guard,
@@ -115,8 +127,8 @@ impl ImportTestEnv {
 
 impl Drop for ImportTestEnv {
     fn drop(&mut self) {
-        std::env::remove_var("RASK_CACHE_DIR");
-        std::env::remove_var("RASK_LOCKFILE");
+        std::env::remove_var("scalf_CACHE_DIR");
+        std::env::remove_var("scalf_LOCKFILE");
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
@@ -133,11 +145,20 @@ fn evaluates_string_and_list_methods() {
 }
 
 #[test]
+fn implicit_nil_treats_unknown_variables_as_nil() {
+    let value = run_with_implicit_nil("[missing or 5, missing?.name or \"none\"]");
+    assert_eq!(
+        value,
+        Value::list(vec![Value::Int(5), Value::String("none".to_string())])
+    );
+}
+
+#[test]
 fn evaluates_string_interpolation() {
-    let value = run("name = \"Rask\"\n\
+    let value = run("name = \"scalf\"\n\
          count = 2 + 2\n\
          \"Hello, {name}! {count}\"");
-    assert_eq!(value, Value::String("Hello, Rask! 4".to_string()));
+    assert_eq!(value, Value::String("Hello, scalf! 4".to_string()));
 }
 
 #[test]
@@ -148,7 +169,7 @@ fn keeps_escaped_braces_in_strings() {
 
 #[test]
 fn evaluates_map_methods_and_indexing() {
-    let value = run("m = {name: \"rask\"}\n\
+    let value = run("m = {name: \"scalf\"}\n\
          m.set(\"version\", 1)\n\
          m[\"version\"]");
     assert_eq!(value, Value::Int(1));
@@ -156,11 +177,11 @@ fn evaluates_map_methods_and_indexing() {
 
 #[test]
 fn evaluates_json_roundtrip() {
-    let value = run("data = {name: \"rask\", nums: [1, 2, 3]}\n\
+    let value = run("data = {name: \"scalf\", nums: [1, 2, 3]}\n\
          encoded = json.stringify(data)\n\
          decoded = json.parse(encoded)\n\
          decoded[\"name\"]");
-    assert_eq!(value, Value::String("rask".to_string()));
+    assert_eq!(value, Value::String("scalf".to_string()));
 }
 
 #[test]
@@ -176,7 +197,7 @@ fn evaluates_fs_module() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be valid")
         .as_nanos();
-    path.push(format!("rask_phase3_{}.txt", stamp));
+    path.push(format!("scalf_phase3_{}.txt", stamp));
     let path_str = path.to_string_lossy().replace('\\', "\\\\");
 
     let script = format!(
@@ -194,10 +215,10 @@ fn evaluates_fs_module() {
 
 #[test]
 fn denies_fs_without_permissions() {
-    let tokens = rask::lexer::lex("fs.exists(\"/tmp/not-used\")").expect("lex should succeed");
-    let mut parser = rask::parser::Parser::new(tokens);
+    let tokens = scalf::lexer::lex("fs.exists(\"/tmp/not-used\")").expect("lex should succeed");
+    let mut parser = scalf::parser::Parser::new(tokens);
     let program = parser.parse_program().expect("parse should succeed");
-    let mut runtime = rask::runtime::Runtime::new();
+    let mut runtime = scalf::runtime::Runtime::new();
     let result = runtime.run_program(&program);
     assert!(result.is_err());
 }
@@ -212,24 +233,24 @@ fn evaluates_list_comprehension_and_graphemes() {
 #[test]
 fn evaluates_path_module() {
     let value = run(
-        "p = path.join(path.cwd(), \"stdlib\", \"std\", \"math.rask\")\n\
+        "p = path.join(path.cwd(), \"stdlib\", \"std\", \"math.scalf\")\n\
          path.basename(p)",
     );
-    assert_eq!(value, Value::String("math.rask".to_string()));
+    assert_eq!(value, Value::String("math.scalf".to_string()));
 }
 
 #[test]
 fn env_get_requires_permission() {
-    std::env::set_var("RASK_TEST_ENV_KEY", "ok");
-    let tokens = rask::lexer::lex("env.get(\"RASK_TEST_ENV_KEY\")").expect("lex should succeed");
-    let mut parser = rask::parser::Parser::new(tokens);
+    std::env::set_var("scalf_TEST_ENV_KEY", "ok");
+    let tokens = scalf::lexer::lex("env.get(\"scalf_TEST_ENV_KEY\")").expect("lex should succeed");
+    let mut parser = scalf::parser::Parser::new(tokens);
     let program = parser.parse_program().expect("parse should succeed");
-    let mut restricted = rask::runtime::Runtime::new();
+    let mut restricted = scalf::runtime::Runtime::new();
     assert!(restricted.run_program(&program).is_err());
 
-    let mut permissions = rask::runtime::Permissions::default();
+    let mut permissions = scalf::runtime::Permissions::default();
     permissions.allow_env = true;
-    let mut enabled = rask::runtime::Runtime::with_permissions(permissions);
+    let mut enabled = scalf::runtime::Runtime::with_permissions(permissions);
     let value = enabled
         .run_program(&program)
         .expect("runtime should succeed");
@@ -240,7 +261,7 @@ fn env_get_requires_permission() {
 fn http_requires_allow_net_permission() {
     let result = run_result(
         "http.get(\"https://example.com\").status",
-        rask::runtime::Permissions::default(),
+        scalf::runtime::Permissions::default(),
     );
     let message = result.expect_err("http should be denied").to_string();
     assert!(
@@ -263,7 +284,7 @@ fn evaluates_http_get_headers_and_json() {
         base_url
     );
 
-    let mut permissions = rask::runtime::Permissions::default();
+    let mut permissions = scalf::runtime::Permissions::default();
     permissions.allow_net.push("127.0.0.1".to_string());
     let value = run_with_permissions(&script, permissions);
     assert_eq!(value, Value::Int(207));
@@ -295,7 +316,7 @@ fn http_honors_timeout() {
     );
     let script = format!("http.get(\"{}/slow\", 10).status", base_url);
 
-    let mut permissions = rask::runtime::Permissions::default();
+    let mut permissions = scalf::runtime::Permissions::default();
     permissions.allow_net.push("127.0.0.1".to_string());
     let result = run_result(&script, permissions);
     let message = result
@@ -324,7 +345,7 @@ fn http_requests_start_concurrently() {
         url_a, url_b
     );
 
-    let mut permissions = rask::runtime::Permissions::default();
+    let mut permissions = scalf::runtime::Permissions::default();
     permissions.allow_net.push("127.0.0.1".to_string());
 
     let started = Instant::now();
@@ -370,9 +391,9 @@ fn imports_url_module_with_namespace_isolation() {
     let (base_url, requests, handle) =
         spawn_http_server(module_source, "text/plain", Duration::from_millis(0));
 
-    let import_spec = format!("{}/lib.rask@v1", base_url);
+    let import_spec = format!("{}/lib.scalf@v1", base_url);
     let script = format!("use \"{}\" as remote\nremote.value", import_spec);
-    let mut permissions = rask::runtime::Permissions::default();
+    let mut permissions = scalf::runtime::Permissions::default();
     permissions.allow_net.push("127.0.0.1".to_string());
     let value = run_with_permissions(&script, permissions);
     assert_eq!(value, Value::Int(42));
@@ -389,7 +410,7 @@ fn imports_url_module_with_namespace_isolation() {
         .and_then(serde_json::Value::as_object)
         .expect("import lock entry should exist");
     assert_eq!(entry.get("version").and_then(|v| v.as_str()), Some("v1"));
-    let expected_url = format!("{}/lib.rask", base_url);
+    let expected_url = format!("{}/lib.scalf", base_url);
     assert_eq!(
         entry.get("url").and_then(|v| v.as_str()),
         Some(expected_url.as_str())
@@ -399,7 +420,7 @@ fn imports_url_module_with_namespace_isolation() {
         .recv_timeout(Duration::from_secs(2))
         .expect("server should capture import request");
     assert!(
-        request.to_ascii_lowercase().contains("get /lib.rask"),
+        request.to_ascii_lowercase().contains("get /lib.scalf"),
         "expected import request path, got: {}",
         request
     );
@@ -413,9 +434,9 @@ fn import_fails_when_cached_hash_is_tampered() {
     let (base_url, _requests, handle) =
         spawn_http_server(module_source, "text/plain", Duration::from_millis(0));
 
-    let import_spec = format!("{}/mod.rask", base_url);
+    let import_spec = format!("{}/mod.scalf", base_url);
     let script = format!("use \"{}\" as remote\nremote.value", import_spec);
-    let mut permissions = rask::runtime::Permissions::default();
+    let mut permissions = scalf::runtime::Permissions::default();
     permissions.allow_net.push("127.0.0.1".to_string());
     let first = run_with_permissions(&script, permissions.clone());
     assert_eq!(first, Value::Int(7));
@@ -428,7 +449,7 @@ fn import_fails_when_cached_hash_is_tampered() {
         .as_str()
         .expect("sha should exist")
         .to_string();
-    let cache_file = env.cache_dir.join("modules").join(format!("{}.rask", sha));
+    let cache_file = env.cache_dir.join("modules").join(format!("{}.scalf", sha));
     std::fs::write(&cache_file, "value = 999\n").expect("tamper cache file");
 
     let result = run_result(&script, permissions);
@@ -444,13 +465,13 @@ fn import_fails_when_cached_hash_is_tampered() {
 fn runs_test_blocks_and_reports_failures() {
     let source = "test \"pass\" { assert 1 + 1 == 2 }\n\
                   test \"fail\" { assert 1 + 1 == 3, \"bad math\" }";
-    let tokens = rask::lexer::lex(source).expect("lex should succeed");
-    let mut parser = rask::parser::Parser::new(tokens);
+    let tokens = scalf::lexer::lex(source).expect("lex should succeed");
+    let mut parser = scalf::parser::Parser::new(tokens);
     let program = parser.parse_program().expect("parse should succeed");
 
     let mut runtime =
-        rask::runtime::Runtime::with_permissions(rask::runtime::Permissions::allow_all())
-            .with_source_label("tests/runtime_tests.rask");
+        scalf::runtime::Runtime::with_permissions(scalf::runtime::Permissions::allow_all())
+            .with_source_label("tests/runtime_tests.scalf");
     let report = runtime.run_tests(&program);
 
     assert_eq!(report.passed, 1);
@@ -495,7 +516,7 @@ fn resolves_pending_values_with_concurrency_join() {
         url_a, url_b
     );
 
-    let mut permissions = rask::runtime::Permissions::default();
+    let mut permissions = scalf::runtime::Permissions::default();
     permissions.allow_net.push("127.0.0.1".to_string());
     let value = run_with_permissions(&script, permissions);
     assert_eq!(value, Value::Int(400));
@@ -517,7 +538,7 @@ fn concurrency_timeout_returns_error_value() {
         url
     );
 
-    let mut permissions = rask::runtime::Permissions::default();
+    let mut permissions = scalf::runtime::Permissions::default();
     permissions.allow_net.push("127.0.0.1".to_string());
     let value = run_with_permissions(&script, permissions);
     match value {

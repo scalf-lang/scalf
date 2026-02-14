@@ -1,8 +1,8 @@
 fn format_source(source: &str) -> String {
-    let tokens = rask::lexer::lex(source).expect("lex should succeed");
-    let mut parser = rask::parser::Parser::new(tokens);
+    let tokens = scalf::lexer::lex(source).expect("lex should succeed");
+    let mut parser = scalf::parser::Parser::new(tokens);
     let program = parser.parse_program().expect("parse should succeed");
-    rask::formatter::format_program(&program)
+    scalf::formatter::format_program(&program)
 }
 
 #[test]

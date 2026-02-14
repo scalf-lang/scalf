@@ -241,6 +241,7 @@ pub struct Runtime {
     scopes: Vec<HashMap<String, Value>>,
     pending_return: Option<Value>,
     permissions: Permissions,
+    implicit_nil_for_unknown_variables: bool,
     #[cfg(feature = "net")]
     loaded_url_modules: HashMap<String, Value>,
     #[cfg(feature = "net")]
@@ -259,6 +260,7 @@ impl Runtime {
             scopes: vec![builtins::core_globals()],
             pending_return: None,
             permissions,
+            implicit_nil_for_unknown_variables: false,
             #[cfg(feature = "net")]
             loaded_url_modules: HashMap::new(),
             #[cfg(feature = "net")]
@@ -270,6 +272,11 @@ impl Runtime {
 
     pub fn with_source_label(mut self, label: impl Into<String>) -> Self {
         self.source_label = label.into();
+        self
+    }
+
+    pub fn with_implicit_nil_for_unknown_variables(mut self, enabled: bool) -> Self {
+        self.implicit_nil_for_unknown_variables = enabled;
         self
     }
 
@@ -666,7 +673,10 @@ impl Runtime {
             self.import_stack.push(cache_key.clone());
             let loaded = (|| {
                 let resolved = resolve_url_import(spec, &self.permissions)?;
-                let mut module_runtime = Runtime::with_permissions(self.permissions.clone());
+                let mut module_runtime = Runtime::with_permissions(self.permissions.clone())
+                    .with_implicit_nil_for_unknown_variables(
+                        self.implicit_nil_for_unknown_variables,
+                    );
                 module_runtime.import_stack = self.import_stack.clone();
                 module_runtime.loaded_url_modules = self.loaded_url_modules.clone();
                 let module = module_runtime.evaluate_imported_module(&resolved.source, spec)?;
@@ -705,7 +715,8 @@ impl Runtime {
             ))
         })?;
 
-        let mut checker = crate::typechecker::TypeChecker::new();
+        let mut checker = crate::typechecker::TypeChecker::new()
+            .with_implicit_nil_for_unknown_variables(self.implicit_nil_for_unknown_variables);
         if let Err(errors) = checker.check_program(&program) {
             let message = errors
                 .into_iter()
@@ -746,9 +757,15 @@ impl Runtime {
             }
             Expr::Bool(value) => Ok(Value::Bool(*value)),
             Expr::Nil => Ok(Value::Nil),
-            Expr::Variable(name) => self
-                .lookup(name)
-                .ok_or_else(|| RuntimeError::new(format!("unknown variable '{}'", name))),
+            Expr::Variable(name) => {
+                if let Some(value) = self.lookup(name) {
+                    Ok(value)
+                } else if self.implicit_nil_for_unknown_variables {
+                    Ok(Value::Nil)
+                } else {
+                    Err(RuntimeError::new(format!("unknown variable '{}'", name)))
+                }
+            }
             Expr::Unary { op, rhs } => {
                 let rhs_value = self.eval_expr(rhs)?;
                 match op {
