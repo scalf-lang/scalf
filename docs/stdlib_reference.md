@@ -1,6 +1,6 @@
 # Standard Library Reference (Generated)
 
-This file is auto-generated from top-of-file comments in `stdlib/std/*.rask`.
+This file is auto-generated from top-of-file comments in `stdlib/std/*.scl`.
 Regenerate with `rask docs` (or `cargo run -- docs`).
 
 ## Modules
@@ -117,4 +117,3 @@ Functions:
 - time.now_ms() -> int (unix epoch milliseconds)
 - time.now_s() -> int (unix epoch seconds)
 - time.sleep(ms) -> nil
-

@@ -1,0 +1,39 @@
+#!/usr/bin/env scalf --allow-read=. --allow-write=.
+
+use std.fs
+use std.time
+use std.crypto
+
+def backup_file(source_path: string, timestamp: int) {
+  if !fs.exists(source_path) {
+    print("⚠️  Skipping missing file: {source_path}")
+    return
+  }
+
+  content = fs.read(source_path) or return
+  digest = crypto.sha256(content)
+  safe_name = source_path.replace("/", "_").replace("\\", "_")
+  backup_path = "backup_{timestamp}_{safe_name}.bak"
+
+  fs.write(backup_path, content)
+  print("✓ {source_path} -> {backup_path} ({digest})")
+}
+
+def create_backup() {
+  timestamp = time.now_s()
+  print("📦 Starting backup job: {timestamp}")
+
+  files = [
+    "README.md",
+    "docs/language_spec.md",
+    "plans/plan.md"
+  ]
+
+  for file in files {
+    backup_file(file, timestamp)
+  }
+
+  print("✅ Backup job finished")
+}
+
+create_backup()

@@ -172,14 +172,14 @@ impl RuntimeError {
             message: message.into(),
             code: "RUNTIME0001",
             hint: None,
-            docs_url: Some("https://rask-lang.dev/errors/RUNTIME0001".to_string()),
+            docs_url: Some("https://scalf-lang.dev/errors/RUNTIME0001".to_string()),
             stack_frames: Vec::new(),
         }
     }
 
     fn with_code(mut self, code: &'static str) -> Self {
         self.code = code;
-        self.docs_url = Some(format!("https://rask-lang.dev/errors/{}", code));
+        self.docs_url = Some(format!("https://scalf-lang.dev/errors/{}", code));
         self
     }
 
@@ -649,7 +649,7 @@ impl Runtime {
                 "URL imports require a net-enabled build; rebuild with feature 'net'",
             )
             .with_code("RUNTIME0501")
-            .with_hint("run `rask build <file>` without disabling network feature"));
+            .with_hint("run `scalf build <file>` without disabling network feature"));
         }
 
         #[cfg(feature = "net")]
@@ -808,7 +808,9 @@ impl Runtime {
                 self.read_member(object_value, property, *optional)
             }
             Expr::Coalesce { lhs, rhs } => {
-                let lhs_value = self.eval_expr(lhs)?;
+                let lhs_value = self
+                    .eval_expr(lhs)
+                    .unwrap_or_else(|err| Value::Error(err.message));
                 if matches!(lhs_value, Value::Nil | Value::Error(_)) {
                     self.eval_expr(rhs)
                 } else {
@@ -816,7 +818,9 @@ impl Runtime {
                 }
             }
             Expr::OrReturn { lhs, return_value } => {
-                let lhs_value = self.eval_expr(lhs)?;
+                let lhs_value = self
+                    .eval_expr(lhs)
+                    .unwrap_or_else(|err| Value::Error(err.message));
                 if matches!(lhs_value, Value::Nil | Value::Error(_)) {
                     let value = self.eval_expr(return_value)?;
                     self.signal_return(value);
@@ -2333,7 +2337,7 @@ fn fetch_url_import_source(url: &str, permissions: &Permissions) -> Result<Strin
 
 #[cfg(feature = "net")]
 fn read_cached_import(modules_dir: &Path, sha256: &str) -> Result<Option<String>, RuntimeError> {
-    let file_path = modules_dir.join(format!("{}.rask", sha256));
+    let file_path = modules_dir.join(format!("{}.scl", sha256));
     if !file_path.exists() {
         return Ok(None);
     }
@@ -2358,7 +2362,7 @@ fn read_cached_import(modules_dir: &Path, sha256: &str) -> Result<Option<String>
 
 #[cfg(feature = "net")]
 fn write_cached_import(modules_dir: &Path, sha256: &str, source: &str) -> Result<(), RuntimeError> {
-    let file_path = modules_dir.join(format!("{}.rask", sha256));
+    let file_path = modules_dir.join(format!("{}.scl", sha256));
     fs::write(&file_path, source).map_err(|err| {
         RuntimeError::new(format!(
             "failed to write cached import '{}': {}",
@@ -2478,29 +2482,29 @@ fn write_import_lockfile(
 
 #[cfg(feature = "net")]
 fn import_lockfile_path() -> PathBuf {
-    if let Ok(path) = std::env::var("RASK_LOCKFILE") {
+    if let Ok(path) = std::env::var("scalf_LOCKFILE") {
         return PathBuf::from(path);
     }
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".rask.lock")
+        .join(".scl.lock")
 }
 
 #[cfg(feature = "net")]
 fn import_cache_root() -> PathBuf {
-    if let Ok(path) = std::env::var("RASK_CACHE_DIR") {
+    if let Ok(path) = std::env::var("scalf_CACHE_DIR") {
         return PathBuf::from(path);
     }
 
     if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".rask").join("cache");
+        return PathBuf::from(home).join(".scl").join("cache");
     }
     if let Ok(home) = std::env::var("USERPROFILE") {
-        return PathBuf::from(home).join(".rask").join("cache");
+        return PathBuf::from(home).join(".scl").join("cache");
     }
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".rask")
+        .join(".scl")
         .join("cache")
 }
 

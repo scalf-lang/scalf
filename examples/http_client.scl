@@ -1,4 +1,4 @@
-#!/usr/bin/env rask --allow-net=www.google.com
+#!/usr/bin/env scalf --allow-net=www.google.com
 use std.http
 
 response = http.get("https://www.google.com/") // lol

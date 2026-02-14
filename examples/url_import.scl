@@ -1,0 +1,5 @@
+#!/usr/bin/env scalf --allow-net=example.com
+
+use "https://example.com/lib.scalf@v1" as lib
+
+print(lib.version)

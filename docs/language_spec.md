@@ -66,7 +66,7 @@ generic_args -> "<" type ("," type)* ">" ;
 
 ## Doc Generation
 
-- `rask docs` generates `docs/stdlib_reference.md` from top-of-file comments in `stdlib/std/*.rask`
+- `rask docs` generates `docs/stdlib_reference.md` from top-of-file comments in `stdlib/std/*.scl`
 - Optional output override: `rask docs --out=path/to/file.md`
 
 ## Tooling Commands

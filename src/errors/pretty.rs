@@ -17,7 +17,7 @@ pub fn format_parse_error(
         .nth(err.line.saturating_sub(1))
         .unwrap_or_default();
     format!(
-        "parse error [PARSE0001]: {}\n--> {}:{}:{}\n{}\nhelp: check syntax near this token\ndocs: https://rask-lang.dev/errors/PARSE0001",
+        "parse error [PARSE0001]: {}\n--> {}:{}:{}\n{}\nhelp: check syntax near this token\ndocs: https://scalf-lang.dev/errors/PARSE0001",
         err.message,
         source_label,
         err.line,
@@ -34,7 +34,7 @@ pub fn format_type_errors(
         .iter()
         .map(|err| {
             format!(
-                "type error [TYPE0001]: {}\n--> {}\nhelp: check type annotations and function signatures\ndocs: https://rask-lang.dev/errors/TYPE0001",
+                "type error [TYPE0001]: {}\n--> {}\nhelp: check type annotations and function signatures\ndocs: https://scalf-lang.dev/errors/TYPE0001",
                 err.message, source_label
             )
         })
@@ -50,7 +50,7 @@ pub fn format_lint_warning(warn: &crate::lint::LintWarning, source_label: &str) 
         rendered.push_str(&format!("\nhelp: {}", hint));
     }
     rendered.push_str(&format!(
-        "\ndocs: https://rask-lang.dev/errors/{}",
+        "\ndocs: https://scalf-lang.dev/errors/{}",
         warn.code
     ));
     rendered

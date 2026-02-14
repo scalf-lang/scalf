@@ -1,0 +1,4 @@
+#!/usr/bin/env scalf
+name = "scalf"
+print("Hello, {name}!")
+

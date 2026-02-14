@@ -1,0 +1,6 @@
+#!/usr/bin/env scalf --allow-read=. --allow-write=output.txt
+use std.fs
+
+content = fs.read("input.txt")
+print(content)
+

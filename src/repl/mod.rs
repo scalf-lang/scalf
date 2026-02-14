@@ -129,7 +129,7 @@ pub fn run_with_permissions(
     let docs = repl_docs();
     let mut show_timing = true;
 
-    println!("Rask REPL");
+    println!("Scalf REPL");
     println!("Commands: :help, :doc <symbol>, :complete <prefix>, :history, :timing on|off, :quit");
     println!("Multi-line mode is automatic when input is syntactically incomplete.");
 
@@ -144,7 +144,7 @@ pub fn run_with_permissions(
 
         loop {
             let prompt = if multiline_buffer.is_empty() {
-                "rask> "
+                "scalf> "
             } else {
                 "....> "
             };
@@ -235,7 +235,7 @@ pub fn run_with_permissions(
                     }
                 }
                 Err(err) => eprintln!(
-                    "lex error [LEX0001]: {}\n--> <repl>:{}:{}\ndocs: https://rask-lang.dev/errors/LEX0001",
+                    "lex error [LEX0001]: {}\n--> <repl>:{}:{}\ndocs: https://scalf-lang.dev/errors/LEX0001",
                     err.message, err.line, err.column
                 ),
             }
@@ -245,7 +245,7 @@ pub fn run_with_permissions(
         let mut line = String::new();
         loop {
             let prompt = if multiline_buffer.is_empty() {
-                "rask> "
+                "scalf> "
             } else {
                 "....> "
             };
@@ -332,7 +332,7 @@ pub fn run_with_permissions(
                     }
                 }
                 Err(err) => eprintln!(
-                    "lex error [LEX0001]: {}\n--> <repl>:{}:{}\ndocs: https://rask-lang.dev/errors/LEX0001",
+                    "lex error [LEX0001]: {}\n--> <repl>:{}:{}\ndocs: https://scalf-lang.dev/errors/LEX0001",
                     err.message, err.line, err.column
                 ),
             }
@@ -516,16 +516,16 @@ fn trim_history(history: &mut Vec<String>) {
 }
 
 fn repl_history_path() -> PathBuf {
-    if let Ok(path) = std::env::var("RASK_REPL_HISTORY") {
+    if let Ok(path) = std::env::var("scalf_REPL_HISTORY") {
         return PathBuf::from(path);
     }
     if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".rask").join("repl_history");
+        return PathBuf::from(home).join(".scl").join("repl_history");
     }
     if let Ok(home) = std::env::var("USERPROFILE") {
-        return PathBuf::from(home).join(".rask").join("repl_history");
+        return PathBuf::from(home).join(".scl").join("repl_history");
     }
-    PathBuf::from(".rask_repl_history")
+    PathBuf::from(".scl_repl_history")
 }
 
 fn should_echo_repl_result(program: &crate::parser::ast::Program) -> bool {
@@ -583,8 +583,8 @@ mod tests {
     fn repl_echoes_simple_expression_only() {
         assert!(should_echo_repl_result(&parse_program("name")));
         assert!(should_echo_repl_result(&parse_program("1 + 2")));
-        assert!(!should_echo_repl_result(&parse_program("name = \"rask\"")));
-        assert!(!should_echo_repl_result(&parse_program("print(\"rask\")")));
+        assert!(!should_echo_repl_result(&parse_program("name = \"scalf\"")));
+        assert!(!should_echo_repl_result(&parse_program("print(\"scalf\")")));
         assert!(!should_echo_repl_result(&parse_program("len([1, 2, 3])")));
     }
 }

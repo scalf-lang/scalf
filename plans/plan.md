@@ -55,7 +55,7 @@
   - Maps `{key: value}`
   - Indexing and iteration
 
-**Milestone**: FizzBuzz works in Rask
+**Milestone**: FizzBuzz works in scalf
 
 ---
 
@@ -169,13 +169,13 @@
 **Goal**: Import from URLs, no central registry, hermetic builds
 
 #### Week 17-18: URL Imports
-- [x] Import syntax: `use "https://example.com/lib.rask" as lib`
+- [x] Import syntax: `use "https://example.com/lib.scalf" as lib`
 - [x] Download and cache imports
   - Hash-based caching (content-addressed)
   - Global cache location
   - Version pinning: `@v1.2.3`
 - [x] Lockfile generation
-  - Auto-generate `.rask.lock`
+  - Auto-generate `.scalf.lock`
   - Lock exact hashes/versions
   - Verify on subsequent runs
 - [x] Namespace isolation
@@ -215,15 +215,15 @@
 - [x] Error codes and documentation links
 
 #### Week 23-24: Tooling
-- [x] Auto-formatter: `rask fmt`
+- [x] Auto-formatter: `scalf fmt`
   - One style, no configuration
   - Format on save integration
-- [x] Linter: `rask check`
+- [x] Linter: `scalf check`
   - Catch common mistakes
   - Best practice enforcement
 - [x] Built-in testing
   - `test "name" { assert ... }` syntax
-  - `rask test` command
+  - `scalf test` command
   - Test runner with good output
 
 **Milestone**: Errors teach you how to fix them, tools work out of the box
@@ -244,7 +244,7 @@
 - [x] Fast startup (<10ms target)
 
 #### Week 28-30: Binary Compilation
-- [x] `rask build` command
+- [x] `scalf build` command
   - Compile script to standalone binary
   - Embed runtime
   - Cross-platform support
@@ -260,7 +260,7 @@
 
 ### Phase 8: Advanced Features (Weeks 31-36)
 
-**Goal**: Features that make Rask delightful
+**Goal**: Features that make scalf delightful
 
 #### Week 31-32: Concurrency
 - [x] Async runtime
@@ -272,7 +272,7 @@
 - [x] Channels/communication (if needed)
 
 #### Week 33-34: LSP (Language Server Protocol)
-- [ ] `rask lsp` command
+- [ ] `scalf lsp` command
 - [ ] Autocomplete
 - [ ] Go to definition
 - [ ] Hover documentation
@@ -297,35 +297,35 @@
 ### Settled Decisions
 
 **Statement terminators**: Newlines (with optional semicolons for multiple statements per line)
-```rask
+```scalf
 x = 10
 y = 20
 z = x + y; print(z)  # semicolon optional for multiline
 ```
 
 **Braces vs indentation**: Braces `{ }` - easier to parse, copy-paste friendly
-```rask
+```scalf
 if condition {
   doThing()
 }
 ```
 
 **Function syntax**: `def` keyword
-```rask
+```scalf
 def greet(name: string) -> string {
   return "Hello, {name}!"
 }
 ```
 
 **Type annotations**: After variable (inference-friendly)
-```rask
+```scalf
 age: int = 25
 name: string = "Alice"
 items = [1, 2, 3]  # inferred as List<int>
 ```
 
 **Comments**: `#` for single line, `/* */` for multiline
-```rask
+```scalf
 # This is a comment
 /* This is a
    multiline comment */
@@ -333,14 +333,14 @@ items = [1, 2, 3]  # inferred as List<int>
 
 ---
 
-## Example Rask Code
+## Example scalf Code
 
 ### Basic Script
-```rask
-#!/usr/bin/env rask
+```scalf
+#!/usr/bin/env scalf
 
 # Variables with inference
-name = "Rask"
+name = "scalf"
 version = 1.0
 
 # Functions
@@ -352,7 +352,7 @@ print(greet(name))
 ```
 
 ### With Types
-```rask
+```scalf
 # Explicit types when you want them
 users: List<string> = []
 count: int = 0
@@ -365,14 +365,14 @@ def processUser(user: string) -> Result<User, Error> {
 ```
 
 ### HTTP Request
-```rask
-#!/usr/bin/env rask --allow-net=api.github.com
+```scalf
+#!/usr/bin/env scalf --allow-net=api.github.com
 
 use std.http
 use std.json
 
 # Fetch data
-response = http.get("https://api.github.com/users/rask")
+response = http.get("https://api.github.com/users/scalf")
 data = response.json()
 
 print("User: {data.name}")
@@ -380,8 +380,8 @@ print("Repos: {data.public_repos}")
 ```
 
 ### File Processing
-```rask
-#!/usr/bin/env rask --allow-read=. --allow-write=output.txt
+```scalf
+#!/usr/bin/env scalf --allow-read=. --allow-write=output.txt
 
 use std.fs
 use std.json
@@ -398,7 +398,7 @@ fs.write("output.txt", results.join("\n"))
 ```
 
 ### Concurrent Operations
-```rask
+```scalf
 use std.http
 
 # All three start immediately and run concurrently
@@ -443,7 +443,7 @@ print(comments.json().length)
 ## Project Structure
 
 ```
-rask/
+scalf/
 ├── src/
 │   ├── main.rs              # CLI entry point
 │   ├── repl/
@@ -472,22 +472,22 @@ rask/
 │   └── errors/
 │       ├── mod.rs           # Error handling
 │       └── pretty.rs        # Pretty error printing
-├── stdlib/                   # Standard library in Rask
+├── stdlib/                   # Standard library in scalf
 │   ├── std/
-│   │   ├── fs.rask
-│   │   ├── http.rask
+│   │   ├── fs.scl
+│   │   ├── http.scl
 │   │   └── ...
 ├── tests/
 │   ├── lexer_tests.rs
 │   ├── parser_tests.rs
 │   └── integration/
-│       ├── basic.rask
-│       ├── types.rask
+│       ├── basic.scalf
+│       ├── types.scalf
 │       └── ...
 ├── examples/
-│   ├── hello.rask
-│   ├── http_client.rask
-│   ├── file_processor.rask
+│   ├── hello.scalf
+│   ├── http_client.scalf
+│   ├── file_processor.scalf
 │   └── ...
 ├── docs/
 │   ├── language_spec.md
@@ -503,10 +503,10 @@ rask/
 ## Marketing & Community
 
 ### Before Writing Code
-1. ✅ Claim domain: rask-lang.org or getrask.dev
+1. ✅ Claim domain: scalf-lang.org or getscalf.dev
 2. ✅ Set up GitHub org/repo
 3. ✅ Create Discord/Slack for early adopters
-4. ✅ Write manifesto: "Why Rask?"
+4. ✅ Write manifesto: "Why scalf?"
 
 ### Launch Strategy
 1. **Blog the journey**: Weekly dev updates
@@ -544,8 +544,8 @@ rask/
 ### Phase 8 Success
 - Production use cases emerge
 - Community contributions
-- Other tools integrate with Rask
-- Job postings mention Rask (the dream!)
+- Other tools integrate with scalf
+- Job postings mention scalf (the dream!)
 
 ---
 
@@ -571,11 +571,11 @@ rask/
 ## Next Actions
 
 ### Immediate (This Week)
-1. [ ] Set up Rust project: `cargo new rask`
+1. [ ] Set up Rust project: `cargo new scalf`
 2. [ ] Implement basic lexer for numbers and operators
 3. [ ] Parse and evaluate `2 + 2`
 4. [ ] Get REPL loop working
-5. [ ] Write first blog post: "Why I'm Building Rask"
+5. [ ] Write first blog post: "Why I'm Building scalf"
 
 ### Short Term (This Month)
 1. [ ] Variables and basic expressions
@@ -637,4 +637,4 @@ rask/
 
 ---
 
-*Remember: The best language is the one people actually use. Focus on making Rask so easy and reliable that switching is a no-brainer.*
+*Remember: The best language is the one people actually use. Focus on making scalf so easy and reliable that switching is a no-brainer.*

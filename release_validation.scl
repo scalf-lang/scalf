@@ -1,0 +1,176 @@
+# Rask release validation suite (local-only)
+#
+# Recommended run:
+#   cargo run -- test release_validation --allow-all
+#.scl
+# Narrow-permission run:
+#   cargo run -- test release_validation.scl --allow-read=. --allow-write=. --allow-env --allow-net=example.com,raw.githubusercontent.com
+#
+# Manual checks (CLI/REPL features a script cannot self-validate):
+#   cargo run -- check release_validation.scl
+#   cargo run -- fmt --check release_validation.scl
+#   cargo run -- startup release_validation.scl --iterations=25 --no-budget
+#   cargo run -- build release_validation.scl --target=windows-x64
+#   cargo run
+
+use std.math as m
+use std.json as j
+use std.path as p
+use std.fs as files
+use std.env as e
+use std.http as net
+use std.time as clock
+use std.crypto as hash
+use std.concurrency as c
+use "https://raw.githubusercontent.com/MINTILER-DEV/rask/main/examples/hello.scl@main" as remote_hello
+
+net_probe_url = "https://raw.githubusercontent.com/MINTILER-DEV/rask/main/examples/hello.scl"
+
+def square(x: int) -> int {
+  return x * x
+}
+
+def above_four(x: int) -> bool {
+  return x > 4
+}
+
+def add_ints(acc: int, x: int) -> int {
+  return acc + x
+}
+
+def ensure_name(value: string?) -> string {
+  stable = value or return "missing"
+  return stable!
+}
+
+test "phase1_core_language" {
+  total = 0
+  for i = 0; i < 5; i = i + 1 { total = total + i }
+  while total < 10 { total = total + 1 }
+  if total == 10 { total = total + 1 } else { total = 0 }
+
+  nums = [1, 2, 3]
+  mapping = {a: 1}
+  mapping.set("b", 2)
+
+  assert total == 11, "control flow regression"
+  assert nums[1] == 2
+  assert mapping["b"] == 2
+}
+
+test "phase2_types_null_safety_and_patterns" {
+  id: int | string = 42
+  alias: string? = nil
+  display = alias or "anon"
+  assert id == 42
+  assert display == "anon"
+
+  user = nil
+  shown = user?.profile?.name or "none"
+  assert shown == "none"
+
+  assert ensure_name(nil) == "missing"
+  assert ensure_name("rask") == "rask"
+
+  state = match 200 { 200 => "ok", _ => "bad" }
+  assert state == "ok"
+
+  [first, _] = [9, 8]
+  assert first == 9
+}
+
+test "phase3_strings_lists_maps_and_modules" {
+  raw = "  hello,world  "
+  cooked = raw.trim().uppercase().replace("HELLO", "RASK")
+  parts = raw.trim().split(",")
+  assert cooked == "RASK,WORLD", "string transform chain"
+  assert len(parts) == 2, "string split size"
+  assert len("👍🏽ok") == 3, "grapheme-aware length"
+
+  nums = [3, 1, 2]
+  nums.push(4)
+  popped = nums.pop()
+  mapped = nums.map(square)
+  filtered = mapped.filter(above_four)
+  reduced = mapped.reduce(add_ints, 0)
+  sorted_copy = mapped.sorted()
+  mapped.sort()
+
+  assert popped == 4, "list pop"
+  assert reduced == 14, "list reduce"
+  assert filtered[0] == 9, "list filter"
+  assert mapped[0] == 1, "list sort mutating"
+  assert sorted_copy[2] == 9, "list sorted copy"
+
+  info = {name: "rask"}
+  info.set("version", 8)
+  assert info.get("name") == "rask", "map get"
+  assert info.has("version"), "map has"
+  assert len(info.keys()) == 2, "map keys"
+  assert len(info.values()) == 2, "map values"
+
+  assert m.round(m.pi) == 3, "math round"
+  assert m.max(2, 5) == 5.0, "math max"
+}
+
+test "phase3_fs_json_path_env_time_crypto" {
+  tmp = p.join(p.cwd(), ".release_validation_tmp.json")
+  payload = {name: "rask", version: 8, ok: true}
+
+  files.write(tmp, j.stringify(payload, true))
+  assert files.exists(tmp)
+
+  decoded = j.parse(files.read(tmp))
+  assert decoded["name"] == "rask"
+  assert decoded["version"] == 8
+
+  files.delete(tmp)
+  assert files.exists(tmp) == false
+
+  assert e.get("RASK_RELEASE_VALIDATION_SHOULD_NOT_EXIST") == nil
+
+  start = clock.now_ms()
+  clock.sleep(5)
+  finish = clock.now_ms()
+  assert finish >= start
+
+  assert hash.sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  assert p.basename(p.join(p.cwd(), "stdlib", "std", "math.scl")) == "math.scl"
+}
+
+test "phase4_http_module" {
+  resp = net.get(net_probe_url, {XTest: "rask"}, 5000)
+  assert resp.status >= 200
+  assert len(resp.text()) > 0
+}
+
+test "phase5_url_import_and_stdlib_org" {
+  assert remote_hello.name == "Rask"
+  assert hash.sha256("rask") == crypto.sha256("rask")
+}
+
+test "phase6_built_in_test_assert_surface" {
+  value = 2 + 2
+  assert value == 4, "assert should show clear diagnostics"
+}
+
+test "phase8_concurrency_helpers_and_channels" {
+  pending_a = net.get(net_probe_url, 5000)
+  pending_b = net.get(net_probe_url, 5000)
+  joined = c.join([pending_a, pending_b])
+  assert joined[0].status >= 200
+  assert joined[1].status >= 200
+
+  awaited = c.await(net.get(net_probe_url, 5000))
+  assert awaited.status >= 200
+
+  bounded = c.timeout(5000, net.get(net_probe_url, 5000))
+  assert bounded.status >= 200
+
+  ch = c.channel()
+  ch.send(1)
+  ch.send(2)
+  sum = ch.recv() + ch.try_recv()
+  assert sum == 3
+  assert ch.len() == 0
+}

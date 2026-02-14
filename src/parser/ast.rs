@@ -86,7 +86,7 @@ fn default_name_for_url_import(spec: &str) -> String {
         .split('@')
         .next()
         .unwrap_or("module")
-        .trim_end_matches(".rask");
+        .trim_end_matches(".scl");
 
     let mut out = String::new();
     for ch in base.chars() {

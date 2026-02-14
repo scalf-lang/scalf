@@ -115,6 +115,24 @@ fn parses_function_with_or_return_and_panic_unwrap() {
 }
 
 #[test]
+fn parses_or_return_without_value_as_nil() {
+    let statements =
+        parse("def load() { value = fs.read(\"missing.txt\") or return; return value }");
+    match &statements[0] {
+        Stmt::FunctionDef { body, .. } => match &body[0] {
+            Stmt::VarDecl { initializer, .. } => match initializer {
+                Expr::OrReturn { return_value, .. } => {
+                    assert!(matches!(return_value.as_ref(), Expr::Nil));
+                }
+                _ => panic!("expected or-return expression"),
+            },
+            _ => panic!("expected var declaration in function body"),
+        },
+        _ => panic!("expected function definition"),
+    }
+}
+
+#[test]
 fn parses_match_expression() {
     let statements = parse("result = match status { 200 => \"ok\", _ => \"bad\" }");
     match &statements[0] {
@@ -190,6 +208,17 @@ fn parses_list_map_literals_and_index() {
 }
 
 #[test]
+fn parses_multiline_map_literal() {
+    let statements = parse("value = {\n  name: \"scalf\",\n  version: 1,\n}\nvalue[\"name\"]");
+    match &statements[0] {
+        Stmt::VarDecl { initializer, .. } => {
+            assert!(matches!(initializer, Expr::MapLiteral(_)));
+        }
+        _ => panic!("expected var declaration"),
+    }
+}
+
+#[test]
 fn parses_list_comprehension() {
     let statements = parse("items = [x * 2 for x in nums if x > 1]");
     match &statements[0] {
@@ -199,6 +228,17 @@ fn parses_list_comprehension() {
             }
             _ => panic!("expected list comprehension"),
         },
+        _ => panic!("expected var declaration"),
+    }
+}
+
+#[test]
+fn parses_multiline_list_literal() {
+    let statements = parse("items = [\n  1,\n  2,\n  3,\n]\nitems[0]");
+    match &statements[0] {
+        Stmt::VarDecl { initializer, .. } => {
+            assert!(matches!(initializer, Expr::ListLiteral(_)));
+        }
         _ => panic!("expected var declaration"),
     }
 }

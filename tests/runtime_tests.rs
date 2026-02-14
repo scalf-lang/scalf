@@ -214,6 +214,49 @@ fn evaluates_fs_module() {
 }
 
 #[test]
+fn coalesce_recovers_from_fs_read_error() {
+    let mut missing = std::env::temp_dir();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be valid")
+        .as_nanos();
+    missing.push(format!("scalf_missing_{}.txt", stamp));
+    let missing_str = missing.to_string_lossy().replace('\\', "\\\\");
+
+    let script = format!("fs.read(\"{}\") or \"fallback\"", missing_str);
+    let value = run(&script);
+    assert_eq!(value, Value::String("fallback".to_string()));
+}
+
+#[test]
+fn or_return_recovers_from_fs_read_error() {
+    let mut missing = std::env::temp_dir();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be valid")
+        .as_nanos();
+    missing.push(format!("scalf_missing_{}.txt", stamp));
+    let missing_str = missing.to_string_lossy().replace('\\', "\\\\");
+
+    let script = format!(
+        "def load() -> List<string> {{\n\
+         content = fs.read(\"{}\") or return []\n\
+         return [content]\n\
+         }}\n\
+         load()",
+        missing_str
+    );
+    let value = run(&script);
+    assert_eq!(value, Value::list(vec![]));
+}
+
+#[test]
+fn or_return_without_value_returns_nil() {
+    let value = run("def pick(v) { stable = v or return; return stable }\npick(nil)");
+    assert_eq!(value, Value::Nil);
+}
+
+#[test]
 fn denies_fs_without_permissions() {
     let tokens = scalf::lexer::lex("fs.exists(\"/tmp/not-used\")").expect("lex should succeed");
     let mut parser = scalf::parser::Parser::new(tokens);
@@ -233,10 +276,10 @@ fn evaluates_list_comprehension_and_graphemes() {
 #[test]
 fn evaluates_path_module() {
     let value = run(
-        "p = path.join(path.cwd(), \"stdlib\", \"std\", \"math.scalf\")\n\
+        "p = path.join(path.cwd(), \"stdlib\", \"std\", \"math.scl\")\n\
          path.basename(p)",
     );
-    assert_eq!(value, Value::String("math.scalf".to_string()));
+    assert_eq!(value, Value::String("math.scl".to_string()));
 }
 
 #[test]

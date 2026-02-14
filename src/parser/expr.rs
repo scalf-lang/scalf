@@ -33,7 +33,15 @@ impl Parser {
 
         while self.matches_keyword(TokenKind::Or) {
             if self.matches_keyword(TokenKind::Return) {
-                let return_value = self.expression()?;
+                let return_value = if self.check_kind(&TokenKind::Newline)
+                    || self.check_kind(&TokenKind::Semicolon)
+                    || self.check_kind(&TokenKind::RightBrace)
+                    || self.check_kind(&TokenKind::Eof)
+                {
+                    Expr::Nil
+                } else {
+                    self.expression()?
+                };
                 expr = Expr::OrReturn {
                     lhs: Box::new(expr),
                     return_value: Box::new(return_value),
@@ -290,6 +298,7 @@ impl Parser {
 
     fn list_literal(&mut self) -> Result<Expr, ParseError> {
         self.consume_symbol(TokenKind::LeftBracket, "expected '['")?;
+        self.skip_statement_breaks();
         if self.check_kind(&TokenKind::RightBracket) {
             self.consume_symbol(TokenKind::RightBracket, "expected ']' after list literal")?;
             return Ok(Expr::ListLiteral(Vec::new()));
@@ -325,17 +334,20 @@ impl Parser {
 
         let mut items = vec![first_expr];
         while self.matches_symbol(TokenKind::Comma) {
+            self.skip_statement_breaks();
             if self.check_kind(&TokenKind::RightBracket) {
                 break;
             }
             items.push(self.expression()?);
         }
+        self.skip_statement_breaks();
         self.consume_symbol(TokenKind::RightBracket, "expected ']' after list literal")?;
         Ok(Expr::ListLiteral(items))
     }
 
     fn map_literal(&mut self) -> Result<Expr, ParseError> {
         self.consume_symbol(TokenKind::LeftBrace, "expected '{'")?;
+        self.skip_statement_breaks();
         let mut entries = Vec::new();
         if !self.check_kind(&TokenKind::RightBrace) {
             loop {
@@ -359,11 +371,17 @@ impl Parser {
                 let value = self.expression()?;
                 entries.push(MapEntryExpr { key, value });
 
-                if !self.matches_symbol(TokenKind::Comma) {
+                if self.matches_symbol(TokenKind::Comma) {
+                    self.skip_statement_breaks();
+                    if self.check_kind(&TokenKind::RightBrace) {
+                        break;
+                    }
+                } else {
                     break;
                 }
             }
         }
+        self.skip_statement_breaks();
         self.consume_symbol(TokenKind::RightBrace, "expected '}' after map literal")?;
         Ok(Expr::MapLiteral(entries))
     }

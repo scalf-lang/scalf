@@ -87,7 +87,7 @@ fn collect_module_docs(stdlib_dir: &Path) -> Result<Vec<ModuleDoc>, DocGenError>
         let entry =
             entry.map_err(|err| DocGenError::new(format!("failed to read dir entry: {}", err)))?;
         let path = entry.path();
-        if path.extension().and_then(|v| v.to_str()) == Some("rask") {
+        if path.extension().and_then(|v| v.to_str()) == Some("scl") {
             files.push(path);
         }
     }
@@ -154,8 +154,8 @@ fn extract_top_doc_lines(source: &str) -> Vec<String> {
 fn render_markdown(modules: &[ModuleDoc]) -> String {
     let mut out = String::new();
     out.push_str("# Standard Library Reference (Generated)\n\n");
-    out.push_str("This file is auto-generated from top-of-file comments in `stdlib/std/*.rask`.\n");
-    out.push_str("Regenerate with `rask docs` (or `cargo run -- docs`).\n\n");
+    out.push_str("This file is auto-generated from top-of-file comments in `stdlib/std/*.scl`.\n");
+    out.push_str("Regenerate with `scalf docs` (or `cargo run -- docs`).\n\n");
 
     out.push_str("## Modules\n\n");
     for module in modules {

@@ -1,0 +1,41 @@
+#!/usr/bin/env scalf --allow-net=api.openweathermap.org,wttr.in
+
+use std.http
+use std.json
+use std.concurrency
+
+cities = ["London", "Tokyo", "New York", "Sydney"]
+
+def fetchWeather(city: string) {
+  # Using wttr.in for simple weather (no API key needed)
+  url = "https://wttr.in/{city}?format=j1"
+  response = http.get(url, 5000) or return nil
+  
+  data = response.json() or return nil
+  current = data.current_condition[0] or return nil
+  
+  return {
+    city: city,
+    temp: current.temp_C,
+    condition: current.weatherDesc[0].value,
+    humidity: current.humidity
+  }
+}
+
+print("🌤️  Weather Dashboard")
+print("==================================================")
+
+# Fetch all cities concurrently
+requests = [fetchWeather(city) for city in cities]
+results = concurrency.join(requests)
+
+for weather in results {
+  if weather == nil {
+    print("❌ Failed to fetch data")
+  } else {
+    print("\n📍 {weather.city}")
+    print("   Temperature: {weather.temp}°C")
+    print("   Condition: {weather.condition}")
+    print("   Humidity: {weather.humidity}%")
+  }
+}

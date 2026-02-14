@@ -46,7 +46,7 @@ Phase 5 foundations are implemented:
 - Version pin metadata support via `@version` suffix in URL imports
 - Namespace isolation for URL imports (module-bound exports)
 - Stdlib organization includes `std.time` and `std.crypto`
-- Auto-generated stdlib docs from `stdlib/std/*.rask` doc comments (`rask docs`)
+- Auto-generated stdlib docs from `stdlib/std/*.scl` doc comments (`rask docs`)
 
 Phase 6 foundations are implemented:
 - Runtime diagnostics include error codes, hints, docs links, and stack traces

@@ -1,0 +1,48 @@
+#!/usr/bin/env scalf --allow-write=tasks.json --allow-read=tasks.json
+
+use std.fs
+use std.json
+
+def loadTasks() -> List<Map<string, string>> {
+  content = fs.read("tasks.json") or return []
+  return json.parse(content) or return []
+}
+
+def saveTasks(tasks: List<Map<string, string>>) {
+  content = json.stringify(tasks, true)
+  fs.write("tasks.json", content)
+}
+
+def addTask(tasks, description: string, priority: string) {
+  task = {
+    id: "{len(tasks) + 1}",
+    description: description,
+    priority: priority,
+    done: "false"
+  }
+  tasks.push(task)
+}
+
+def listTasks(tasks) {
+  print("\n📋 Tasks:")
+  for task in tasks {
+    status = match task.done {
+      "true" => "✓",
+      _ => "○"
+    }
+    emoji = match task.priority {
+      "high" => "🔴",
+      "medium" => "🟡",
+      _ => "🟢"
+    }
+    print("  {status} {emoji} {task.description}")
+  }
+}
+
+# Main
+tasks = loadTasks()
+addTask(tasks, "Write documentation", "high")
+addTask(tasks, "Fix bug in parser", "medium")
+addTask(tasks, "Add more examples", "low")
+listTasks(tasks)
+saveTasks(tasks)
