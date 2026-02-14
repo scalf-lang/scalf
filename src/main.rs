@@ -249,16 +249,30 @@ fn run_build_command(args: &[String]) -> Result<(), String> {
     let required_features = script_required_cargo_features(&program);
 
     let resolved_target = target.as_deref().map(resolve_target_alias).transpose()?;
-    let build_target_dir = env::var("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("target").join("embedded-build"));
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let caller_cwd = env::current_dir()
+        .map_err(|err| format!("failed to determine current directory: {}", err))?;
+    let build_target_dir = match env::var("CARGO_TARGET_DIR") {
+        Ok(value) => {
+            let configured = PathBuf::from(value);
+            if configured.is_absolute() {
+                configured
+            } else {
+                normalize_pathbuf(caller_cwd.join(configured))
+            }
+        }
+        Err(_) => default_temp_embedded_build_dir(),
+    };
+    let manifest_path = manifest_dir.join("Cargo.toml");
 
     let mut command = Command::new("cargo");
     command
         .arg("build")
         .arg("--bin")
         .arg("rask")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .arg("--manifest-path")
+        .arg(&manifest_path)
+        .current_dir(&caller_cwd)
         .env("CARGO_TARGET_DIR", &build_target_dir)
         .env("RASK_EMBEDDED_SCRIPT", &source)
         .env("RASK_EMBEDDED_SOURCE_LABEL", &script_path);
@@ -586,17 +600,14 @@ fn run_source_file(
     use_vm: bool,
 ) -> Result<(), String> {
     let program = parse_and_typecheck(source, path)?;
-    let value = if use_vm {
-        rask::vm::run_program(&program).map_err(|err| err.to_string())?
+    if use_vm {
+        let _ = rask::vm::run_program(&program).map_err(|err| err.to_string())?;
     } else {
         let mut runtime =
             rask::runtime::Runtime::with_permissions(permissions).with_source_label(path);
-        runtime
+        let _ = runtime
             .run_program(&program)
-            .map_err(|err| err.to_string())?
-    };
-    if !matches!(value, rask::runtime::value::Value::Nil) {
-        println!("{}", value);
+            .map_err(|err| err.to_string())?;
     }
     Ok(())
 }
@@ -657,6 +668,10 @@ fn default_build_output_path(script_path: &str, is_windows: bool) -> PathBuf {
     } else {
         PathBuf::from(stem)
     }
+}
+
+fn default_temp_embedded_build_dir() -> PathBuf {
+    env::temp_dir().join("rask-embedded-build-cache")
 }
 
 fn script_required_cargo_features(program: &rask::parser::ast::Program) -> Vec<String> {

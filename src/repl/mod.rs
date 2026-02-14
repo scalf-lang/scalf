@@ -194,6 +194,7 @@ pub fn run_with_permissions(
                     match parser.parse_program() {
                         Ok(program) => match checker.check_program(&program) {
                             Ok(_) => {
+                                let should_echo = should_echo_repl_result(&program);
                                 if let Some(editor_helper) = editor.helper_mut() {
                                     editor_helper.set_symbols(
                                         checker.inferred_types().keys().cloned().collect(),
@@ -201,7 +202,9 @@ pub fn run_with_permissions(
                                 }
                                 match runtime.run_program(&program) {
                                     Ok(value) => {
-                                        if !matches!(value, crate::runtime::value::Value::Nil) {
+                                        if should_echo
+                                            && !matches!(value, crate::runtime::value::Value::Nil)
+                                        {
                                             println!("{}", value);
                                         }
                                         if show_timing {
@@ -292,9 +295,13 @@ pub fn run_with_permissions(
                     let mut parser = crate::parser::Parser::new(tokens);
                     match parser.parse_program() {
                         Ok(program) => match checker.check_program(&program) {
-                            Ok(_) => match runtime.run_program(&program) {
+                            Ok(_) => {
+                                let should_echo = should_echo_repl_result(&program);
+                                match runtime.run_program(&program) {
                                 Ok(value) => {
-                                    if !matches!(value, crate::runtime::value::Value::Nil) {
+                                    if should_echo
+                                        && !matches!(value, crate::runtime::value::Value::Nil)
+                                    {
                                         println!("{}", value);
                                     }
                                     if show_timing {
@@ -305,6 +312,7 @@ pub fn run_with_permissions(
                                     }
                                 }
                                 Err(err) => eprintln!("{}", err),
+                            }
                             },
                             Err(errors) => {
                                 for rendered in
@@ -515,4 +523,65 @@ fn repl_history_path() -> PathBuf {
         return PathBuf::from(home).join(".rask").join("repl_history");
     }
     PathBuf::from(".rask_repl_history")
+}
+
+fn should_echo_repl_result(program: &crate::parser::ast::Program) -> bool {
+    if program.statements.len() != 1 {
+        return false;
+    }
+    let stmt = &program.statements[0];
+    match stmt {
+        crate::parser::ast::Stmt::Expr(expr) => is_echoable_expr(expr),
+        _ => false,
+    }
+}
+
+fn is_echoable_expr(expr: &crate::parser::ast::Expr) -> bool {
+    use crate::parser::ast::Expr;
+
+    match expr {
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::String { .. }
+        | Expr::Bool(_)
+        | Expr::Nil
+        | Expr::Variable(_) => true,
+        Expr::Unary { rhs, .. } | Expr::Grouping(rhs) | Expr::PanicUnwrap(rhs) => {
+            is_echoable_expr(rhs)
+        }
+        Expr::Binary { lhs, rhs, .. } | Expr::Coalesce { lhs, rhs } => {
+            is_echoable_expr(lhs) && is_echoable_expr(rhs)
+        }
+        Expr::Member { object, .. } => is_echoable_expr(object),
+        Expr::Index { object, index } => is_echoable_expr(object) && is_echoable_expr(index),
+        Expr::ListLiteral(items) => items.iter().all(is_echoable_expr),
+        Expr::MapLiteral(entries) => entries.iter().all(|entry| is_echoable_expr(&entry.value)),
+        Expr::Match { subject, arms } => {
+            is_echoable_expr(subject) && arms.iter().all(|arm| is_echoable_expr(&arm.value))
+        }
+        Expr::Call { .. }
+        | Expr::Assign { .. }
+        | Expr::OrReturn { .. }
+        | Expr::ListComprehension { .. } => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_echo_repl_result;
+
+    fn parse_program(source: &str) -> crate::parser::ast::Program {
+        let tokens = crate::lexer::lex(source).expect("lex should succeed");
+        let mut parser = crate::parser::Parser::new(tokens);
+        parser.parse_program().expect("parse should succeed")
+    }
+
+    #[test]
+    fn repl_echoes_simple_expression_only() {
+        assert!(should_echo_repl_result(&parse_program("name")));
+        assert!(should_echo_repl_result(&parse_program("1 + 2")));
+        assert!(!should_echo_repl_result(&parse_program("name = \"rask\"")));
+        assert!(!should_echo_repl_result(&parse_program("print(\"rask\")")));
+        assert!(!should_echo_repl_result(&parse_program("len([1, 2, 3])")));
+    }
 }
