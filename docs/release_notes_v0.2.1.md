@@ -1,28 +1,23 @@
 # SCALF v0.2.1
 
-This patch release improves script compatibility and runtime stability, especially for router-style and map-backed object patterns.
+Release date: February 14, 2026
 
-## Highlights
+This is a patch release generated from `git log 0.2.0..HEAD` and `git diff 0.2.0..HEAD`.
 
-- Import behavior fixes
-  - String imports now correctly support local files (non-HTTP specs) and resolve relative to the current source file.
-  - Build feature detection no longer treats local string imports as network imports.
+## Summary
 
-- Parser compatibility improvements
-  - Added logical `and` operator support.
-  - Map literal keys now accept keyword-style keys (for example: `use: ...`).
-  - Member/index assignment forms are accepted and lowered internally.
+- Migrated error documentation links from `scalf-lang.dev` (didn't exist) to `scalf-lang.github.io`.
+- Bumped crate version from `0.2.0` to `0.2.1`.
 
-- Runtime behavior fixes
-  - Map-backed callable members now dispatch correctly before built-in map methods.
-  - Improved method-call context for map-backed objects (`this` and captured state behavior).
-  - Better compatibility with real router middleware/handler patterns.
+## Changes Since 0.2.0
 
-- Typechecker improvements
-  - Equality checks against `nil` are accepted in broader valid cases.
-  - Improved inference/validation for boolean logic expressions (`and` and boolean `or` usage).
+- Error/reporting URL updates across:
+  - CLI lex error output (`src/main.rs`)
+  - Pretty parse/type/lint formatting (`src/errors/pretty.rs`)
+  - REPL lex error output (`src/repl/mod.rs`)
+  - Runtime error docs URL generation (`src/runtime/mod.rs`)
 
-## Validation
+## Why This Release
 
-Validated with targeted lexer/parser/typechecker/runtime tests and end-to-end router example execution.
-
+- Ensures all surfaced diagnostics point to the current docs host.
+- Keeps error links consistent across CLI, REPL, and runtime paths.
