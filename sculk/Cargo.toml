@@ -1,0 +1,56 @@
+[package]
+name = "sculk"
+version = "0.0.1"
+edition = "2021"
+description = "Native code generation backend for SCALF (EXPERIMENTAL)"
+license = "MIT"
+authors = ["Your Name"]
+
+[lib]
+name = "sculk"
+path = "src/lib.rs"
+
+[dependencies]
+# Reuse main SCALF frontend for lexing/parsing
+scalf = { path = ".." }
+
+# Cranelift - Production-ready codegen backend
+cranelift = { version = "0.115", optional = true }
+cranelift-module = { version = "0.115", optional = true }
+cranelift-jit = { version = "0.115", optional = true }
+cranelift-object = { version = "0.115", optional = true }
+cranelift-native = { version = "0.115", optional = true }
+
+# Object file generation
+target-lexicon = "0.12"
+object = { version = "0.36", optional = true }
+
+# For IR printing/debugging
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[features]
+default = ["cranelift-backend"]
+
+# Backend implementations
+cranelift-backend = [
+    "dep:cranelift",
+    "dep:cranelift-module",
+    "dep:cranelift-jit",
+    "dep:cranelift-object",
+    "dep:cranelift-native",
+    "dep:object"
+]
+
+# Future backends
+qbe-backend = []
+custom-backend = []
+
+# Development features
+debug-ir = ["dep:serde"]
+
+[[bench]]
+name = "compilation"
+harness = false

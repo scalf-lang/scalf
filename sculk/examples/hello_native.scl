@@ -1,0 +1,7 @@
+# Example: Hello World (Native)
+# This will eventually compile to native code via Sculk
+
+def main() {
+    print("Hello from native SCALF!")
+    return 0
+}
