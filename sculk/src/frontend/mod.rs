@@ -79,12 +79,9 @@ impl Frontend {
                     return self.resolve_url_use(spec, base_dir);
                 }
 
-                if alias.is_some() {
-                    return Err(CompileError::NotImplemented(
-                        "`use ... as ...` is not implemented in sculk yet",
-                    ));
-                }
-
+                // Local string imports are expanded inline. Alias handling for module objects
+                // is deferred; for now alias does not affect expansion behavior.
+                let _ = alias;
                 self.resolve_local_file_use(spec, base_dir)
             }
         }
@@ -205,7 +202,15 @@ fn resolve_base_dir(origin_path: &Path) -> PathBuf {
         return std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     }
 
-    let normalized = normalize_path(origin_path.to_path_buf());
+    let absolute_origin = if origin_path.is_absolute() {
+        origin_path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(origin_path)
+    };
+
+    let normalized = normalize_path(absolute_origin);
     if normalized.is_dir() {
         normalized
     } else {
