@@ -283,7 +283,7 @@ fn emit_runtime_semantics_exe(
     let scalf_dep_path = scalf_root.display().to_string().replace('\\', "/");
 
     let cargo_toml = format!(
-        "[package]\nname = \"sculk_embedded_runner\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\nscalf = {{ path = \"{}\" }}\n",
+        "[package]\nname = \"sculk_embedded_runner\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\nscalf = {{ path = \"{}\" }}\n\n[profile.release]\nopt-level = \"z\"\nlto = true\ncodegen-units = 1\npanic = \"abort\"\nstrip = \"symbols\"\n",
         scalf_dep_path
     );
     let launcher_source = generate_runtime_launcher_source(&source, script_label);
