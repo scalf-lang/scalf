@@ -209,14 +209,12 @@ Ask in the main SCALF repo: https://github.com/yourusername/scalf
 
 ## Advanced Example Scripts
 
-The `sculk/examples/advanced/` directory includes larger scripts that run on the current experimental native subset:
+The `sculk/examples/advanced/` directory includes larger scripts for ongoing compiler work:
 
 - `arithmetic_pipeline.scl` - chained function calls and arithmetic flow
 - `function_chain_logic.scl` - call graph + comparisons + boolean logic
 - `top_level_script.scl` - top-level script mode without explicit `def main`
 - `use_local_module.scl` - local file import via `use "math_utils.scl"`
-
-`use` support in Sculk currently resolves local string imports (`use "file.scl"`). Module-path imports, URL imports, and `as` aliases are not implemented yet.
 
 Run one with:
 
@@ -225,15 +223,23 @@ cd sculk
 cargo run -- examples/advanced/arithmetic_pipeline.scl
 ```
 
+## Windows Exe Output
 
-
-### Windows .exe Output
-
-Sculk can emit standalone Windows executables by linking generated object code through `rustc`:
+`--emit-exe` now builds an executable that runs the script through SCALF runtime semantics (same parser/typechecker/runtime path as normal runtime mode). This keeps behavior aligned with runtime execution.
 
 ```bash
 cd sculk
-cargo run -- examples/advanced/use_local_module.scl --emit-exe
-# or choose output path
-cargo run -- examples/advanced/use_local_module.scl --emit-exe target/use_local_module.exe
+cargo run -- ../release_validation.scl --emit-exe
 ```
+
+Use `--out` as shorthand for `--emit-exe <path> --no-run`:
+
+```bash
+# emits out\release_validation.exe and does not run the script now
+cargo run -- ../release_validation.scl --out out/release_validation.exe
+```
+
+Notes:
+
+- Runtime mode is the default (`cargo run -- file.scl`).
+- `--native` still executes through Sculk IR/JIT and remains experimental.
