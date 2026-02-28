@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use scalf::runtime::value::Value as RuntimeValue;
+use scalf::vm::{BytecodeChunk, Instruction as VmInstruction};
 use sculk::backend::cranelift::CraneliftBackend;
 use sculk::backend::Backend;
 use sculk::Compiler;
@@ -32,6 +33,7 @@ fn run() -> Result<(), String> {
     let mut run_main = true;
     let mut emit_obj: Option<PathBuf> = None;
     let mut emit_exe: Option<Option<PathBuf>> = None;
+    let mut emit_sclc: Option<Option<PathBuf>> = None;
     let mut execution_mode = ExecutionMode::Runtime;
     let mut opt_level: u8 = 0;
 
@@ -73,6 +75,18 @@ fn run() -> Result<(), String> {
                     emit_exe = Some(None);
                 }
             }
+            "--emit-sclc" => {
+                if let Some(next) = args.get(index + 1) {
+                    if !next.starts_with("--") {
+                        index += 1;
+                        emit_sclc = Some(Some(PathBuf::from(next)));
+                    } else {
+                        emit_sclc = Some(None);
+                    }
+                } else {
+                    emit_sclc = Some(None);
+                }
+            }
             "--out" => {
                 index += 1;
                 let Some(path) = args.get(index) else {
@@ -111,6 +125,12 @@ fn run() -> Result<(), String> {
                     unreachable!();
                 };
                 emit_exe = Some(Some(PathBuf::from(path)));
+            }
+            _ if arg.starts_with("--emit-sclc=") => {
+                let Some(path) = arg.strip_prefix("--emit-sclc=") else {
+                    unreachable!();
+                };
+                emit_sclc = Some(Some(PathBuf::from(path)));
             }
             _ if arg.starts_with("--out=") => {
                 let Some(path) = arg.strip_prefix("--out=") else {
@@ -195,6 +215,14 @@ fn run() -> Result<(), String> {
             ensure_exe_extension(&exe_path).display()
         );
     }
+    if let Some(sclc_path_option) = emit_sclc {
+        let sclc_path = sclc_path_option.unwrap_or_else(|| default_sclc_output_path(&script_path));
+        emit_bytecode_file(&script_path_buf, &sclc_path)?;
+        println!(
+            "wrote bytecode {}",
+            ensure_sclc_extension(&sclc_path).display()
+        );
+    }
 
     if run_main {
         match execution_mode {
@@ -219,6 +247,22 @@ fn run() -> Result<(), String> {
 }
 
 fn run_with_full_runtime_semantics(script_path: &Path) -> Result<(), String> {
+    let (source_label, program) = parse_and_typecheck_script(script_path)?;
+
+    let mut runtime =
+        scalf::runtime::Runtime::with_permissions(scalf::runtime::Permissions::allow_all())
+            .with_source_label(source_label);
+    let value = runtime
+        .run_program(&program)
+        .map_err(|err| err.to_string())?;
+
+    println!("program exited with code {}", exit_code_from_value(&value));
+    Ok(())
+}
+
+fn parse_and_typecheck_script(
+    script_path: &Path,
+) -> Result<(String, scalf::parser::ast::Program), String> {
     let source = fs::read_to_string(script_path).map_err(|err| {
         format!(
             "runtime preparation failed: failed to read '{}': {}",
@@ -244,15 +288,15 @@ fn run_with_full_runtime_semantics(script_path: &Path) -> Result<(), String> {
         scalf::errors::pretty::format_type_errors(&source_label, &errors).join("\n\n")
     })?;
 
-    let mut runtime =
-        scalf::runtime::Runtime::with_permissions(scalf::runtime::Permissions::allow_all())
-            .with_source_label(source_label);
-    let value = runtime
-        .run_program(&program)
-        .map_err(|err| err.to_string())?;
+    Ok((source_label, program))
+}
 
-    println!("program exited with code {}", exit_code_from_value(&value));
-    Ok(())
+fn emit_bytecode_file(script_path: &Path, output_path: &Path) -> Result<(), String> {
+    let (_, program) = parse_and_typecheck_script(script_path)?;
+    let chunk = scalf::vm::compile_program(&program).map_err(|err| err.to_string())?;
+    let encoded = encode_sclc_chunk(&chunk)?;
+    let output_path = ensure_sclc_extension(output_path);
+    write_output_file(&output_path, &encoded)
 }
 
 fn emit_runtime_semantics_exe(
@@ -399,6 +443,107 @@ fn to_rust_raw_string_literal(value: &str) -> String {
     format!("\"{}\"", escaped)
 }
 
+fn encode_sclc_chunk(chunk: &BytecodeChunk) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"SCLC");
+    bytes.push(1);
+
+    encode_sclc_count(&mut bytes, chunk.constants.len(), "constant count")?;
+    for constant in &chunk.constants {
+        encode_sclc_constant(&mut bytes, constant)?;
+    }
+
+    encode_sclc_count(&mut bytes, chunk.instructions.len(), "instruction count")?;
+    for instruction in &chunk.instructions {
+        encode_sclc_instruction(&mut bytes, instruction)?;
+    }
+
+    Ok(bytes)
+}
+
+fn encode_sclc_constant(output: &mut Vec<u8>, value: &RuntimeValue) -> Result<(), String> {
+    match value {
+        RuntimeValue::Int(v) => {
+            output.push(0);
+            output.extend_from_slice(&v.to_le_bytes());
+        }
+        RuntimeValue::Float(v) => {
+            output.push(1);
+            output.extend_from_slice(&v.to_le_bytes());
+        }
+        RuntimeValue::String(v) => {
+            output.push(2);
+            encode_sclc_string(output, v)?;
+        }
+        RuntimeValue::Bool(v) => {
+            output.push(3);
+            output.push(u8::from(*v));
+        }
+        RuntimeValue::Nil => {
+            output.push(4);
+        }
+        _ => {
+            return Err(format!(
+                "cannot encode bytecode constant type '{}' into .sclc",
+                value.type_name()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn encode_sclc_instruction(
+    output: &mut Vec<u8>,
+    instruction: &VmInstruction,
+) -> Result<(), String> {
+    match instruction {
+        VmInstruction::LoadConst(index) => {
+            output.push(0);
+            encode_sclc_count(output, *index, "constant index")?;
+        }
+        VmInstruction::LoadGlobal(name) => {
+            output.push(1);
+            encode_sclc_string(output, name)?;
+        }
+        VmInstruction::StoreGlobal(name) => {
+            output.push(2);
+            encode_sclc_string(output, name)?;
+        }
+        VmInstruction::Add => output.push(3),
+        VmInstruction::Subtract => output.push(4),
+        VmInstruction::Multiply => output.push(5),
+        VmInstruction::Divide => output.push(6),
+        VmInstruction::Modulo => output.push(7),
+        VmInstruction::And => output.push(8),
+        VmInstruction::Negate => output.push(9),
+        VmInstruction::Not => output.push(10),
+        VmInstruction::Equal => output.push(11),
+        VmInstruction::NotEqual => output.push(12),
+        VmInstruction::Less => output.push(13),
+        VmInstruction::LessEqual => output.push(14),
+        VmInstruction::Greater => output.push(15),
+        VmInstruction::GreaterEqual => output.push(16),
+        VmInstruction::Print => output.push(17),
+        VmInstruction::Pop => output.push(18),
+        VmInstruction::Return => output.push(19),
+    }
+
+    Ok(())
+}
+
+fn encode_sclc_string(output: &mut Vec<u8>, value: &str) -> Result<(), String> {
+    encode_sclc_count(output, value.len(), "string length")?;
+    output.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
+fn encode_sclc_count(output: &mut Vec<u8>, value: usize, label: &str) -> Result<(), String> {
+    let narrowed =
+        u32::try_from(value).map_err(|_| format!("{} exceeds .sclc encoding limit", label))?;
+    output.extend_from_slice(&narrowed.to_le_bytes());
+    Ok(())
+}
 fn exit_code_from_value(value: &RuntimeValue) -> i64 {
     match value {
         RuntimeValue::Int(code) => *code,
@@ -433,6 +578,15 @@ fn ensure_exe_extension(path: &Path) -> PathBuf {
     }
 }
 
+fn ensure_sclc_extension(path: &Path) -> PathBuf {
+    if path.extension().is_some() {
+        path.to_path_buf()
+    } else {
+        let mut with_ext = path.to_path_buf();
+        with_ext.set_extension("sclc");
+        with_ext
+    }
+}
 fn default_exe_output_path(script_path: &str) -> PathBuf {
     let stem = PathBuf::from(script_path)
         .file_stem()
@@ -442,6 +596,14 @@ fn default_exe_output_path(script_path: &str) -> PathBuf {
     PathBuf::from(format!("{}.exe", stem))
 }
 
+fn default_sclc_output_path(script_path: &str) -> PathBuf {
+    let stem = PathBuf::from(script_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("app")
+        .to_string();
+    PathBuf::from(format!("{}.sclc", stem))
+}
 fn parse_opt_level(value: &str) -> Result<u8, String> {
     let parsed = value
         .parse::<u8>()
@@ -455,5 +617,5 @@ fn parse_opt_level(value: &str) -> Result<u8, String> {
     Ok(parsed)
 }
 fn usage() -> String {
-    "usage: sculk <file.scl> [--runtime|--native] [--emit-ir] [--emit-obj <path>] [--emit-exe[=<path>]] [--out <path>] [--run|--no-run] [--opt-level <0-3>|-O0|-O1|-O2|-O3]".to_string()
+    "usage: sculk <file.scl> [--runtime|--native] [--emit-ir] [--emit-obj <path>] [--emit-exe[=<path>]] [--emit-sclc[=<path>]] [--out <path>] [--run|--no-run] [--opt-level <0-3>|-O0|-O1|-O2|-O3]".to_string()
 }

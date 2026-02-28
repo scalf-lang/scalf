@@ -4,7 +4,7 @@ use std::fmt;
 use crate::parser::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
 use crate::runtime::value::Value;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
     LoadConst(usize),
     LoadGlobal(String),
@@ -28,7 +28,7 @@ pub enum Instruction {
     Return,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BytecodeChunk {
     pub constants: Vec<Value>,
     pub instructions: Vec<Instruction>,
@@ -85,10 +85,18 @@ impl fmt::Display for VmRuntimeError {
 
 impl std::error::Error for VmRuntimeError {}
 
+const SCLC_MAGIC: &[u8; 4] = b"SCLC";
+const SCLC_VERSION: u8 = 1;
+
 pub fn compile_program(program: &Program) -> Result<BytecodeChunk, VmCompileError> {
     let mut compiler = Compiler::new();
     compiler.compile_program(program)?;
     Ok(compiler.chunk)
+}
+
+pub fn compile_program_to_bytes(program: &Program) -> Result<Vec<u8>, VmCompileError> {
+    let chunk = compile_program(program)?;
+    encode_chunk(&chunk)
 }
 
 pub fn run_program(program: &Program) -> Result<Value, VmRuntimeError> {
@@ -99,6 +107,281 @@ pub fn run_program(program: &Program) -> Result<Value, VmRuntimeError> {
 pub fn execute_chunk(chunk: &BytecodeChunk) -> Result<Value, VmRuntimeError> {
     let mut vm = Vm::new();
     vm.execute(chunk)
+}
+
+pub fn run_chunk_bytes(bytes: &[u8]) -> Result<Value, VmRuntimeError> {
+    let chunk = decode_chunk(bytes)?;
+    execute_chunk(&chunk)
+}
+
+pub fn encode_chunk(chunk: &BytecodeChunk) -> Result<Vec<u8>, VmCompileError> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(SCLC_MAGIC);
+    bytes.push(SCLC_VERSION);
+
+    encode_count(&mut bytes, chunk.constants.len(), "constant count")?;
+    for constant in &chunk.constants {
+        encode_constant(&mut bytes, constant)?;
+    }
+
+    encode_count(&mut bytes, chunk.instructions.len(), "instruction count")?;
+    for instruction in &chunk.instructions {
+        encode_instruction(&mut bytes, instruction)?;
+    }
+
+    Ok(bytes)
+}
+
+pub fn decode_chunk(bytes: &[u8]) -> Result<BytecodeChunk, VmRuntimeError> {
+    if bytes.len() < 5 {
+        return Err(VmRuntimeError::new("invalid .sclc payload: too short"));
+    }
+    if &bytes[0..4] != SCLC_MAGIC {
+        return Err(VmRuntimeError::new("invalid .sclc payload: bad magic"));
+    }
+    if bytes[4] != SCLC_VERSION {
+        return Err(VmRuntimeError::new(format!(
+            "unsupported .sclc version {}",
+            bytes[4]
+        )));
+    }
+
+    let mut cursor = 5;
+
+    let constant_count = read_u32(bytes, &mut cursor, "constant count")? as usize;
+    let mut constants = Vec::with_capacity(constant_count);
+    for _ in 0..constant_count {
+        constants.push(decode_constant(bytes, &mut cursor)?);
+    }
+
+    let instruction_count = read_u32(bytes, &mut cursor, "instruction count")? as usize;
+    let mut instructions = Vec::with_capacity(instruction_count);
+    for _ in 0..instruction_count {
+        instructions.push(decode_instruction(bytes, &mut cursor)?);
+    }
+
+    if cursor != bytes.len() {
+        return Err(VmRuntimeError::new("invalid .sclc payload: trailing bytes"));
+    }
+
+    Ok(BytecodeChunk {
+        constants,
+        instructions,
+    })
+}
+
+fn encode_count(output: &mut Vec<u8>, value: usize, label: &str) -> Result<(), VmCompileError> {
+    let narrowed = u32::try_from(value)
+        .map_err(|_| VmCompileError::new(format!("{} exceeds .sclc encoding limit", label)))?;
+    output.extend_from_slice(&narrowed.to_le_bytes());
+    Ok(())
+}
+
+fn encode_string(output: &mut Vec<u8>, value: &str) -> Result<(), VmCompileError> {
+    encode_count(output, value.len(), "string length")?;
+    output.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
+fn encode_constant(output: &mut Vec<u8>, value: &Value) -> Result<(), VmCompileError> {
+    match value {
+        Value::Int(v) => {
+            output.push(0);
+            output.extend_from_slice(&v.to_le_bytes());
+        }
+        Value::Float(v) => {
+            output.push(1);
+            output.extend_from_slice(&v.to_le_bytes());
+        }
+        Value::String(v) => {
+            output.push(2);
+            encode_string(output, v)?;
+        }
+        Value::Bool(v) => {
+            output.push(3);
+            output.push(u8::from(*v));
+        }
+        Value::Nil => {
+            output.push(4);
+        }
+        _ => {
+            return Err(VmCompileError::new(format!(
+                "cannot encode VM constant type '{}' into .sclc",
+                value.type_name()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn encode_instruction(
+    output: &mut Vec<u8>,
+    instruction: &Instruction,
+) -> Result<(), VmCompileError> {
+    match instruction {
+        Instruction::LoadConst(index) => {
+            output.push(0);
+            encode_count(output, *index, "constant index")?;
+        }
+        Instruction::LoadGlobal(name) => {
+            output.push(1);
+            encode_string(output, name)?;
+        }
+        Instruction::StoreGlobal(name) => {
+            output.push(2);
+            encode_string(output, name)?;
+        }
+        Instruction::Add => output.push(3),
+        Instruction::Subtract => output.push(4),
+        Instruction::Multiply => output.push(5),
+        Instruction::Divide => output.push(6),
+        Instruction::Modulo => output.push(7),
+        Instruction::And => output.push(8),
+        Instruction::Negate => output.push(9),
+        Instruction::Not => output.push(10),
+        Instruction::Equal => output.push(11),
+        Instruction::NotEqual => output.push(12),
+        Instruction::Less => output.push(13),
+        Instruction::LessEqual => output.push(14),
+        Instruction::Greater => output.push(15),
+        Instruction::GreaterEqual => output.push(16),
+        Instruction::Print => output.push(17),
+        Instruction::Pop => output.push(18),
+        Instruction::Return => output.push(19),
+    }
+    Ok(())
+}
+
+fn read_u8(bytes: &[u8], cursor: &mut usize, label: &str) -> Result<u8, VmRuntimeError> {
+    if *cursor >= bytes.len() {
+        return Err(VmRuntimeError::new(format!(
+            "invalid .sclc payload: missing {}",
+            label
+        )));
+    }
+    let value = bytes[*cursor];
+    *cursor += 1;
+    Ok(value)
+}
+
+fn read_u32(bytes: &[u8], cursor: &mut usize, label: &str) -> Result<u32, VmRuntimeError> {
+    if bytes.len().saturating_sub(*cursor) < 4 {
+        return Err(VmRuntimeError::new(format!(
+            "invalid .sclc payload: missing {}",
+            label
+        )));
+    }
+    let mut buf = [0_u8; 4];
+    buf.copy_from_slice(&bytes[*cursor..*cursor + 4]);
+    *cursor += 4;
+    Ok(u32::from_le_bytes(buf))
+}
+
+fn read_i64(bytes: &[u8], cursor: &mut usize, label: &str) -> Result<i64, VmRuntimeError> {
+    if bytes.len().saturating_sub(*cursor) < 8 {
+        return Err(VmRuntimeError::new(format!(
+            "invalid .sclc payload: missing {}",
+            label
+        )));
+    }
+    let mut buf = [0_u8; 8];
+    buf.copy_from_slice(&bytes[*cursor..*cursor + 8]);
+    *cursor += 8;
+    Ok(i64::from_le_bytes(buf))
+}
+
+fn read_f64(bytes: &[u8], cursor: &mut usize, label: &str) -> Result<f64, VmRuntimeError> {
+    if bytes.len().saturating_sub(*cursor) < 8 {
+        return Err(VmRuntimeError::new(format!(
+            "invalid .sclc payload: missing {}",
+            label
+        )));
+    }
+    let mut buf = [0_u8; 8];
+    buf.copy_from_slice(&bytes[*cursor..*cursor + 8]);
+    *cursor += 8;
+    Ok(f64::from_le_bytes(buf))
+}
+
+fn read_string(bytes: &[u8], cursor: &mut usize, label: &str) -> Result<String, VmRuntimeError> {
+    let len = read_u32(bytes, cursor, label)? as usize;
+    if bytes.len().saturating_sub(*cursor) < len {
+        return Err(VmRuntimeError::new(format!(
+            "invalid .sclc payload: truncated {}",
+            label
+        )));
+    }
+    let raw = &bytes[*cursor..*cursor + len];
+    *cursor += len;
+    std::str::from_utf8(raw)
+        .map(|value| value.to_string())
+        .map_err(|err| VmRuntimeError::new(format!("invalid .sclc utf-8 string: {}", err)))
+}
+
+fn decode_constant(bytes: &[u8], cursor: &mut usize) -> Result<Value, VmRuntimeError> {
+    let tag = read_u8(bytes, cursor, "constant tag")?;
+    match tag {
+        0 => Ok(Value::Int(read_i64(bytes, cursor, "int constant")?)),
+        1 => Ok(Value::Float(read_f64(bytes, cursor, "float constant")?)),
+        2 => Ok(Value::String(read_string(
+            bytes,
+            cursor,
+            "string constant",
+        )?)),
+        3 => {
+            let flag = read_u8(bytes, cursor, "bool constant")?;
+            match flag {
+                0 => Ok(Value::Bool(false)),
+                1 => Ok(Value::Bool(true)),
+                _ => Err(VmRuntimeError::new("invalid .sclc bool constant value")),
+            }
+        }
+        4 => Ok(Value::Nil),
+        _ => Err(VmRuntimeError::new(format!(
+            "invalid .sclc constant tag {}",
+            tag
+        ))),
+    }
+}
+
+fn decode_instruction(bytes: &[u8], cursor: &mut usize) -> Result<Instruction, VmRuntimeError> {
+    let opcode = read_u8(bytes, cursor, "instruction opcode")?;
+    match opcode {
+        0 => Ok(Instruction::LoadConst(
+            read_u32(bytes, cursor, "constant index")? as usize,
+        )),
+        1 => Ok(Instruction::LoadGlobal(read_string(
+            bytes,
+            cursor,
+            "global name",
+        )?)),
+        2 => Ok(Instruction::StoreGlobal(read_string(
+            bytes,
+            cursor,
+            "global name",
+        )?)),
+        3 => Ok(Instruction::Add),
+        4 => Ok(Instruction::Subtract),
+        5 => Ok(Instruction::Multiply),
+        6 => Ok(Instruction::Divide),
+        7 => Ok(Instruction::Modulo),
+        8 => Ok(Instruction::And),
+        9 => Ok(Instruction::Negate),
+        10 => Ok(Instruction::Not),
+        11 => Ok(Instruction::Equal),
+        12 => Ok(Instruction::NotEqual),
+        13 => Ok(Instruction::Less),
+        14 => Ok(Instruction::LessEqual),
+        15 => Ok(Instruction::Greater),
+        16 => Ok(Instruction::GreaterEqual),
+        17 => Ok(Instruction::Print),
+        18 => Ok(Instruction::Pop),
+        19 => Ok(Instruction::Return),
+        _ => Err(VmRuntimeError::new(format!(
+            "invalid .sclc opcode {}",
+            opcode
+        ))),
+    }
 }
 
 struct Compiler {
@@ -560,5 +843,40 @@ fn to_f64(value: &Value) -> Option<f64> {
         Value::Int(v) => Some(*v as f64),
         Value::Float(v) => Some(*v),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_decode_roundtrip() {
+        let chunk = BytecodeChunk {
+            constants: vec![
+                Value::Int(7),
+                Value::Float(1.5),
+                Value::String("ok".to_string()),
+                Value::Bool(true),
+                Value::Nil,
+            ],
+            instructions: vec![
+                Instruction::LoadConst(0),
+                Instruction::LoadConst(2),
+                Instruction::Print,
+                Instruction::Return,
+            ],
+        };
+
+        let encoded = encode_chunk(&chunk).expect("encoding should succeed");
+        let decoded = decode_chunk(&encoded).expect("decoding should succeed");
+        assert_eq!(decoded, chunk);
+    }
+
+    #[test]
+    fn decode_rejects_bad_magic() {
+        let bytes = b"BAD!\x01";
+        let err = decode_chunk(bytes).expect_err("bad magic should fail");
+        assert!(err.to_string().contains("bad magic"));
     }
 }

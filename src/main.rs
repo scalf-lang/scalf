@@ -25,22 +25,29 @@ fn main() {
     match parse_cli(args) {
         Ok(run_cli) => {
             if let Some(path) = run_cli.script_path {
-                match fs::read_to_string(&path) {
-                    Ok(source) => {
-                        if let Err(err) = run_source_file(
-                            &path,
-                            &source,
-                            run_cli.permissions,
-                            run_cli.use_vm,
-                            run_cli.implicit_nil_for_unknown_variables,
-                        ) {
-                            eprintln!("{}", err);
+                if is_sclc_path(&path) {
+                    if let Err(err) = run_cached_bytecode_file(&path) {
+                        eprintln!("{}", err);
+                        std::process::exit(1);
+                    }
+                } else {
+                    match fs::read_to_string(&path) {
+                        Ok(source) => {
+                            if let Err(err) = run_source_file(
+                                &path,
+                                &source,
+                                run_cli.permissions,
+                                run_cli.use_vm,
+                                run_cli.implicit_nil_for_unknown_variables,
+                            ) {
+                                eprintln!("{}", err);
+                                std::process::exit(1);
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("failed to read '{}': {}", path, err);
                             std::process::exit(1);
                         }
-                    }
-                    Err(err) => {
-                        eprintln!("failed to read '{}': {}", path, err);
-                        std::process::exit(1);
                     }
                 }
             } else if let Some((source_label, source)) = embedded_script() {
@@ -80,6 +87,7 @@ fn maybe_run_subcommand(args: &[String]) -> Option<Result<(), String>> {
         "check" => Some(run_check_command(args)),
         "test" => Some(run_test_command(args)),
         "build" => Some(run_build_command(args)),
+        "cache" => Some(run_cache_command(args)),
         "startup" => Some(run_startup_command(args)),
         _ => None,
     }
@@ -358,6 +366,74 @@ fn run_build_command(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn run_cache_command(args: &[String]) -> Result<(), String> {
+    let mut script_path: Option<String> = None;
+    let mut out: Option<PathBuf> = None;
+
+    let mut index = 1;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--out" {
+            index += 1;
+            let Some(path) = args.get(index) else {
+                return Err("cache option '--out' requires a value".to_string());
+            };
+            out = Some(PathBuf::from(path));
+            index += 1;
+            continue;
+        }
+        if let Some(path) = arg.strip_prefix("--out=") {
+            out = Some(PathBuf::from(path));
+            index += 1;
+            continue;
+        }
+        if arg.starts_with("--") {
+            return Err(format!(
+                "unknown cache option '{}'; supported: --out=<path>",
+                arg
+            ));
+        }
+        if script_path.is_none() {
+            script_path = Some(arg.clone());
+            index += 1;
+            continue;
+        }
+        return Err("cache usage: scalf cache <file> [--out=<path>]".to_string());
+    }
+
+    let Some(script_path) = script_path else {
+        return Err("cache usage: scalf cache <file> [--out=<path>]".to_string());
+    };
+
+    let source = fs::read_to_string(&script_path)
+        .map_err(|err| format!("failed to read '{}': {}", script_path, err))?;
+    let program = parse_and_typecheck(&source, &script_path, false)?;
+    let bytes = scalf::vm::compile_program_to_bytes(&program).map_err(|err| err.to_string())?;
+
+    let output_path =
+        ensure_sclc_extension(&out.unwrap_or_else(|| default_cache_output_path(&script_path)));
+    if let Some(parent) = output_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|err| {
+                format!(
+                    "failed to create output directory '{}': {}",
+                    parent.display(),
+                    err
+                )
+            })?;
+        }
+    }
+    fs::write(&output_path, bytes).map_err(|err| {
+        format!(
+            "failed to write cache file '{}': {}",
+            output_path.display(),
+            err
+        )
+    })?;
+
+    println!("wrote bytecode cache: {}", output_path.display());
+    Ok(())
+}
 fn run_docs_command(args: &[String]) -> Result<(), String> {
     let mut output = PathBuf::from("docs/stdlib_reference.md");
     for arg in args.iter().skip(1) {
@@ -636,6 +712,29 @@ fn run_source_file(
     Ok(())
 }
 
+fn run_cached_bytecode_file(path: &str) -> Result<(), String> {
+    let bytes = fs::read(path).map_err(|err| format!("failed to read '{}': {}", path, err))?;
+    let _ = scalf::vm::run_chunk_bytes(&bytes).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn is_sclc_path(path: &str) -> bool {
+    PathBuf::from(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("sclc"))
+        .unwrap_or(false)
+}
+
+fn ensure_sclc_extension(path: &PathBuf) -> PathBuf {
+    if path.extension().is_some() {
+        path.clone()
+    } else {
+        let mut with_ext = path.clone();
+        with_ext.set_extension("sclc");
+        with_ext
+    }
+}
 fn embedded_script() -> Option<(&'static str, &'static str)> {
     let source = option_env!("scalf_EMBEDDED_SCRIPT")?;
     let label = option_env!("scalf_EMBEDDED_SOURCE_LABEL").unwrap_or("<embedded>");
@@ -694,6 +793,14 @@ fn default_build_output_path(script_path: &str, is_windows: bool) -> PathBuf {
     }
 }
 
+fn default_cache_output_path(script_path: &str) -> PathBuf {
+    let stem = PathBuf::from(script_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("cache")
+        .to_string();
+    PathBuf::from(format!("{}.sclc", stem))
+}
 fn default_temp_embedded_build_dir() -> PathBuf {
     env::temp_dir().join("scalf-embedded-build-cache")
 }
@@ -972,5 +1079,20 @@ mod tests {
             parse_program("response = http.get(\"https://example.com\")\nprint(json.stringify(crypto.sha256(\"x\")))");
         let features = script_required_cargo_features(&program);
         assert_eq!(features, vec!["net".to_string()]);
+    }
+
+    #[test]
+    fn cache_extension_detection_is_case_insensitive() {
+        assert!(is_sclc_path("script.sclc"));
+        assert!(is_sclc_path("script.SCLC"));
+        assert!(!is_sclc_path("script.scl"));
+    }
+
+    #[test]
+    fn cache_output_defaults_to_sclc() {
+        assert_eq!(
+            default_cache_output_path("examples/hello.scl"),
+            PathBuf::from("hello.sclc")
+        );
     }
 }
